@@ -1,0 +1,100 @@
+---
+title: "BDA-project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loaded packages
+
+```{r, echo=TRUE}
+library(tidyr)
+library(rstan)
+library(bayesplot)
+library(aaltobda)
+options(mc.cores = parallel::detectCores())
+library(loo)
+library(ggplot2)
+library(gridExtra)
+library(bayesplot)
+```
+
+# Introduction
+
+// this part has to be inviting xD
+// General talk about Finalnd having high rates of domestic violence, need to raise awareness, etc.
+
+// Main topic/purpose of the project/notebook.
+
+// Present outline of the notebook 
+
+// structure and organization has to be logical
+
+## Data description
+
+## Analysis problem
+
+## Models
+
+// add a clear list of models
+
+### Model 1
+
+```{stan, output.var="stan_model_hierarchical"}
+data {
+    int<lower=0> N; // number of data points
+    int<lower=0> K; // number of groups
+    int<lower=1,upper=K> x[N]; // group indicator
+    vector[N] year;
+    vector[N] y; // number if drowns
+}
+parameters {
+    real mu_group;             // prior mean
+    real<lower=0> tau; // prior std
+    vector[K] alpha;
+    vector[K] beta;
+    real<lower=0> sigma;  // common std
+}
+transformed parameters {
+  vector[K][N/K] mu ;
+  mu[x] = alpha[x] + beta[x] * year;
+}
+model {
+  mu_group ~ normal(10,10);      // weakly informative prior
+  tau ~ cauchy(0,4);     // weakly informative prior
+  mu[x] ~ normal(mu_group, tau); // prior for each mu[x]
+  y[x] ~ normal(mu[x], sigma); // observation for final numbers
+}
+```
+
+
+// include proper prior, jusify
+
+// Rhat convergence diagnostics
+
+// HMC specific convergence diagnostics (divergences, tree depth)
+
+// ESS diagnostics
+
+// posterior predictive checking
+
+### Model 2
+
+// include proper prior, jusify
+
+// Rhat convergence diagnostics
+
+// HMC specific convergence diagnostics (divergences, tree depth)
+
+// ESS diagnostics
+
+// posterior predictive checking
+
+## Problems encountered and potential improvements
+
+
+# Conclusion
+
+// a clear conclusion here
