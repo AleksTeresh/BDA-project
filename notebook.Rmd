@@ -283,40 +283,65 @@ pfit
 
 ```{stan, output.var="stan_model_arma"}
 data {
-  int<lower=1> T;            // num observations
-  real y[T];                 // observed outputs
+  int<lower=1> T;            // num years
+  int<lower=1> K;            // num of groups
+  real y[K, T];                 // observed outputs
 }
 parameters {
-  real mu;                   // mean coeff
-  real phi;                  // autoregression coeff
-  real theta;                // moving avg coeff
-  real<lower=0> sigma;       // noise scale
+  real mu[K];                   // mean coeff
+  real phi[K];                  // autoregression coeff
+  real theta[K];                // moving avg coeff
+  real<lower=0> sigma[K];       // noise scale
 }
 transformed parameters {
-  vector[T] nu;              // prediction for time t
-  vector[T] err;             // error for time t
-  vector[T] ypred;
-  nu[1] = mu + phi * mu;    // assume err[0] == 0
-  err[1] = y[1] - nu[1];
-  nu[2] = mu + phi * y[1] + theta * err[1];
-  err[2] = y[2] - nu[2];
-  for (t in 3:T) {
-    nu[t] = mu + phi * y[t-1] + theta * err[t-1] + theta * err[t-2];
-    err[t] = y[t] - nu[t];
+  real nu[K, T];              // prediction for time t
+  real err[K, T];             // error for time t
+  real ypred[K, T];
+  
+  for (x in 1:K) {
+    nu[x, 1] = mu[x] + phi[x] * mu[x];    // assume err[0] == 0
+    err[x, 1] = y[x, 1] - nu[x, 1];
+    nu[x, 2] = mu[x] + phi[x] * y[x, 1] + theta[x] * err[x, 1];
+    err[x, 2] = y[x, 2] - nu[x, 2];
+    
+    ypred[x, 1] = nu[x, 1] + err[x, 1];
+    ypred[x, 2] = nu[x, 2] + err[x, 2];
+    for (t in 3:T) {
+      nu[x, t] = mu[x] + phi[x] * y[x, t-1] + theta[x] * err[x, t-1] + theta[x] * err[x, t-2];
+      err[x, t] = y[x, t] - nu[x, t];
+      ypred[x, t] = nu[x, t] + err[x, t];
+    }
   }
-  ypred = nu + err;
 }
 model {
-  mu ~ normal(1750, 3000);         // priors
-  err ~ normal(0, sigma);    // likelihood
+  for (x in 1:K) {
+    err[x] ~ normal(0, sigma[x]);    // likelihood
+  }
 }
 ```
+```{r}
+length(unique(data$Victim.s.age))
+```
+
 
 ```{r}
 filtered_data <- filter(data, Victim.s.age == ageGroups[7])
+K = length(unique(data$Victim.s.age))
+
+ys <- list()
+for (i in 1:K) {
+  ys <- c(ys, list(filter(data, Victim.s.age == ageGroups[i])$Number.of.victims))
+}
+
+ys
+```
+
+```{r}
+
 stan_data = list(
-  T = length(filtered_data$Year),
-  y = filtered_data$Number.of.victims
+  T = length(unique(data$Year)),
+  K = K,
+  y = ys
 )
 fit = sampling(stan_model_arma, data = stan_data, iter = 10000)
 print(fit)
@@ -324,13 +349,14 @@ print(fit)
 
 ```{r}
 samples_lin <- rstan::extract(fit, permuted = T)
+stan_data$y[1]
 ```
 
 
 ```{r}
-pred <- apply(samples_lin$nu, 2, quantile, c(0.05, 0.5, 0.95)) %>%
+pred <- apply(matrix(matrix(samples_lin$nu, ncol=11)[,1], ncol=1), 2, quantile, c(0.05, 0.5, 0.95)) %>%
 t() %>% data.frame(x = seq(2009,2018), .) %>% gather(pct, y, -x)
-stan_data = list(x = seq(2009,2018), y = stan_data$y)
+stan_data = list(x = seq(2009,2018), y = stan_data$y[1])
 pfit <- ggplot() +
 geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = pred, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
 labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
