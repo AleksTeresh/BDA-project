@@ -3,14 +3,6 @@ title: "BDA-project"
 output: pdf_document
 ---
 
-```{r setup, include=FALSE}
-knit: (function(input_file, encoding) {
-  out_dir <- 'docs';
-  rmarkdown::render(input_file,
- encoding=encoding,
- output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
-```
-
 # Loaded packages
 
 ```{r, echo=TRUE}
@@ -117,61 +109,7 @@ pfit <- ggplot() +
 
 
 
-```{stan, output.var="stan_model"}
-data {
-    int<lower=0> N; // number of data points
-    vector[N] x;
-    vector[N] y;
-}
-parameters {
-    real alpha;
-    real beta;
-    real c;
-    real<lower=0> sigma;
-}
-transformed parameters {
-  vector[N] mu;
-  
-  for (i in 1:N) {
-    mu[i] = alpha + beta * x[i] + c * x[i] * x[i];
-  }
-}
-model {
-  y ~ normal(mu, sigma); // observation for final numbers
-}
-```
-
-```{r}
-filtered_data <- filter(data, Victim.s.age == ageGroups[5])
-stan_data = list(
-  N = length(filtered_data$Year),
-  x = filtered_data$Year - 2009,
-  y = filtered_data$Number.of.victims
-)
-fit = sampling(stan_model, data = stan_data, seed = SEED)
-```
-
-```{r}
-print(fit)
-```
-
-```{r}
- samples_lin <- rstan::extract(fit, permuted = T)
-mean(samples_lin$beta>0) # probability that beta > 0s
-```
-
-
-```{r}
-mu <- apply(samples_lin$mu, 2, quantile, c(0.05, 0.5, 0.95)) %>%
-t() %>% data.frame(x = stan_data$x, .) %>% gather(pct, y, -x)
-pfit <- ggplot() +
-geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
-labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
-guides(linetype = F)
-pfit
-```
-
-```{stan, output.var="stan_model_ar"}
+```{stan, output.var="stan_model_ar_pooled"}
 data {
   int<lower=0> N;
   vector[N] y;
@@ -182,41 +120,50 @@ parameters {
   real<lower=0> sigma;
 }
 transformed parameters {
-  vector [N] mu ;
+  vector [N-1] mu;
   
-  mu[1] = y[1];
   for (n in 2:N) {
-    mu[n] = alpha + beta * y[n-1];
+    mu[n-1] = alpha + beta * y[n-1];
   }
 }
 model {
   for (n in 2:N) {
-     y[n] ~ normal(mu[n], sigma);
+     y[n] ~ normal(mu[n-1], sigma);
   }
+}
+generated quantities {
+  vector[N-1] log_lik;
+  for (i in 2:N)
+    log_lik[i-1] = normal_lpdf(y[i] | mu[i-1], sigma);
 }
 ```
 
 ```{r}
-filtered_data <- filter(data, Victim.s.age == ageGroups[7])
+pooled_data <- sapply(2009:2018, function (i) sum(filter(data, Year == i)$Number.of.victims))
+pooled_data
+```
+
+```{r}
+
 stan_data = list(
-  N = length(filtered_data$Year),
-  y = filtered_data$Number.of.victims
+  N = 2018-2009+1,
+  y = pooled_data
 )
-fit = sampling(stan_model_ar, data = stan_data, seed = SEED, iter = 4000)
-print(fit)
+fit_pooled = sampling(stan_model_ar_pooled, data = stan_data, iter = 10000)
+print(fit_pooled)
 ```
 
 
 
 ```{r}
-samples_lin <- rstan::extract(fit, permuted = T)
+samples_lin <- rstan::extract(fit_pooled, permuted = T)
 ```
 
 ```{r}
-samples_lin <- rstan::extract(fit, permuted = T)
+samples_lin <- rstan::extract(fit_pooled, permuted = T)
 mu <- apply(samples_lin$mu, 2, quantile, c(0.05, 0.5, 0.95)) %>%
-t() %>% data.frame(x = seq(2009,2018), .) %>% gather(pct, y, -x)
-stan_data = list(x = seq(2009,2018), y = stan_data$y)
+t() %>% data.frame(x = seq(2010,2018), .) %>% gather(pct, y, -x)
+stan_data = list(x = seq(2010,2018), y = stan_data$y)
 pfit <- ggplot() +
 geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
 labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
@@ -224,144 +171,82 @@ guides(linetype = F)
 pfit
 ```
 
-```{stan, output.var="stan_model_ma"}
+```{r}
+log_lik_pooled <- extract_log_lik(fit_pooled, merge_chains = FALSE)
+
+r_eff_pooled <- relative_eff(exp(log_lik_pooled)) 
+loo_pooled <- loo(log_lik_pooled, r_eff = r_eff_pooled)
+print(loo_pooled)
+plot(loo_pooled)
+```
+
+
+```{stan, output.var="stan_model_ar_hierarchical"}
 data {
-  int<lower=3> T;  // number of observations
-  vector[T] y;     // observation at time T
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  vector[N] y;
 }
 parameters {
-  real mu;              // mean
-  real<lower=0> sigma;  // error scale
-  vector[2] theta;      // lag coefficients
+  real mu_group_alpha;
+  real mu_group_beta;
+  real<lower=0> tau_alpha; // prior std
+  real<lower=0> tau_beta; // prior std
+  vector[K] alpha;
+  vector[K] beta;
+  real<lower=0> sigma;
 }
 transformed parameters {
-  vector[T] pred;
-  vector[T] epsilon;    // error terms
-  epsilon[1] = y[1] - mu;
-  epsilon[2] = y[2] - mu - theta[1] * epsilon[1];
+  vector [N-K] mu;
   
-  pred[1] = mu;
-  pred[2] = mu + theta[1] * epsilon[1];
-  for (t in 3:T) {
-    pred[t] = mu + theta[1] * epsilon[t - 1] + theta[2] * epsilon[t - 2];
-    epsilon[t] = y[t] - pred[t];
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
 model {
-  mu ~ normal(1750, 2000);
-  for (t in 3:T)
-    y[t] ~ normal(pred[t],
-                  sigma);
-}
-```
-
-```{r}
-filtered_data <- filter(data, Victim.s.age == ageGroups[7])
-stan_data = list(
-  T = length(filtered_data$Year),
-  y = filtered_data$Number.of.victims
-)
-fit = sampling(stan_model_ma, data = stan_data, iter = 10000)
-print(fit)
-```
-```{r}
-samples_lin <- rstan::extract(fit, permuted = T)
-```
-
-
-```{r}
-pred <- apply(samples_lin$pred, 2, quantile, c(0.05, 0.5, 0.95)) %>%
-t() %>% data.frame(x = seq(2009,2018), .) %>% gather(pct, y, -x)
-stan_data = list(x = seq(2009,2018), y = stan_data$y)
-pfit <- ggplot() +
-geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = pred, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
-labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
-guides(linetype = F)
-pfit
-```
-
-
-```{stan, output.var="stan_model_arma"}
-data {
-  int<lower=1> T;            // num years
-  int<lower=1> K;            // num of groups
-  real y[K, T];                 // observed outputs
-}
-parameters {
-  real mu[K];                   // mean coeff
-  real phi[K];                  // autoregression coeff
-  real theta[K];                // moving avg coeff
-  real<lower=0> sigma[K];       // noise scale
-}
-transformed parameters {
-  real nu[K, T];              // prediction for time t
-  real err[K, T];             // error for time t
-  real ypred[K, T];
-  
-  for (x in 1:K) {
-    nu[x, 1] = mu[x] + phi[x] * mu[x];    // assume err[0] == 0
-    err[x, 1] = y[x, 1] - nu[x, 1];
-    nu[x, 2] = mu[x] + phi[x] * y[x, 1] + theta[x] * err[x, 1];
-    err[x, 2] = y[x, 2] - nu[x, 2];
-    
-    ypred[x, 1] = nu[x, 1] + err[x, 1];
-    ypred[x, 2] = nu[x, 2] + err[x, 2];
-    for (t in 3:T) {
-      nu[x, t] = mu[x] + phi[x] * y[x, t-1] + theta[x] * err[x, t-1] + theta[x] * err[x, t-2];
-      err[x, t] = y[x, t] - nu[x, t];
-      ypred[x, t] = nu[x, t] + err[x, t];
-    }
+  alpha ~ normal(mu_group_alpha, tau_alpha);
+  beta ~ normal(mu_group_beta, tau_beta);
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
   }
 }
-model {
-  for (x in 1:K) {
-    err[x] ~ normal(0, sigma[x]);    // likelihood
-  }
+generated quantities {
+  vector[N-K] log_lik;
+  for (i in K+1:N)
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
 }
 ```
-```{r}
-length(unique(data$Victim.s.age))
-```
-
 
 ```{r}
-filtered_data <- filter(data, Victim.s.age == ageGroups[7])
-K = length(unique(data$Victim.s.age))
-
-ys <- list()
-for (i in 1:K) {
-  ys <- c(ys, list(filter(data, Victim.s.age == ageGroups[i])$Number.of.victims))
-}
-
-ys
+hierarchical_data <- sapply(2009:2018, function (j) sapply(1:11, function (i) filter(data, Victim.s.age == ageGroups[i] & Year == j)$Number.of.victims))
+hierarchical_data
 ```
 
 ```{r}
+rep(1:nrow(hierarchical_data), ncol(hierarchical_data))
+```
 
+```{r}
+nrows <- nrow(hierarchical_data)
 stan_data = list(
-  T = length(unique(data$Year)),
-  K = K,
-  y = ys
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(t(hierarchical_data))
 )
-fit = sampling(stan_model_arma, data = stan_data, iter = 10000)
-print(fit)
-```
-
-```{r}
-samples_lin <- rstan::extract(fit, permuted = T)
-stan_data$y[1]
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, iter = 10000)
+print(fit_hierarchical)
 ```
 
 
 ```{r}
-pred <- apply(matrix(matrix(samples_lin$nu, ncol=11)[,1], ncol=1), 2, quantile, c(0.05, 0.5, 0.95)) %>%
-t() %>% data.frame(x = seq(2009,2018), .) %>% gather(pct, y, -x)
-stan_data = list(x = seq(2009,2018), y = stan_data$y[1])
-pfit <- ggplot() +
-geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = pred, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
-labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
-guides(linetype = F)
-pfit
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
+loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
 ```
 
 // include proper prior, jusify
