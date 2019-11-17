@@ -32,13 +32,7 @@ library(bayesplot)
 
 ## Data description
 
-## Analysis problem
-
-## Models
-
-// add a clear list of models
-
-### Model 1
+Here is a tabular representation of the data.
 
 ```{r}
 data = read.csv("dataset.csv", header = TRUE, sep=";")
@@ -46,9 +40,15 @@ data
 ```
 
 ```{r}
+source('stan_utility.R')
+lsf.str()
+```
+
+Below are scatter plots for each of the age groups
+
+```{r}
 ageGroups <- unique(data$Victim.s.age)
 grouped_data <- c()
-
 
 data_for_age_group <- filter(data, Victim.s.age == ageGroups[1])
 ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
@@ -85,29 +85,663 @@ ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(siz
 
 ```
 
+## Analysis problem
+
+## Models
+
 ```{r}
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[7])
-fit_lin <- stan_glm(Number.of.victims ~ Year, data = data_for_age_group , family="poisson",
-                refresh=1000, iter=1000, chains=4, seed=583829)
-print(fit_lin)
+SEED <- 1474652
+```
+
+// add a clear list of models
+
+### Model 1
+
+*The centered parameterization of our hierarchical model.*
+
+```{stan, output.var="stan_model_ar_hierarchical"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  vector[N] y;
+}
+parameters {
+  real mu_group_alpha;
+  real mu_group_beta;
+  real<lower=0> tau_alpha; // prior std
+  real<lower=0> tau_beta; // prior std
+  vector[K] alpha;
+  vector[K] beta;
+  real<lower=0> sigma;
+}
+transformed parameters {
+  vector [N-K] mu;
+  
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
+  mu_group_beta ~ normal(1, 1000); // weakly informative prior
+  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
+  tau_beta ~ cauchy(0, 5000); // weakly informative prior
+  sigma ~ cauchy(0, 5000); // weakly informative prior
+  
+  alpha ~ normal(mu_group_alpha, tau_alpha);
+  beta ~ normal(mu_group_beta, tau_beta);
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
+  }
+}
+generated quantities {
+  vector[N-K] log_lik;
+  for (i in K+1:N)
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+}
+```
+
+Preparing the data
+
+```{r}
+hierarchical_data <- sapply(2009:2018, function (j) sapply(1:11, function (i) filter(data, Victim.s.age == ageGroups[i] & Year == j)$Number.of.victims))
+hierarchical_data
 ```
 
 ```{r}
-x_predict <- seq(2009,2020)
-N_predict <- length(x_predict)
-y_predict <- posterior_predict(fit_lin, newdata=data.frame(Year=x_predict))
-mu <- apply(t(y_predict), 1, quantile, c(0.05, 0.5, 0.95)) %>%
-  t() %>% data.frame(x = x_predict, .) %>% gather(pct, y, -x)
+c(hierarchical_data)
+```
+
+```{r}
+rep(1:nrow(hierarchical_data), ncol(hierarchical_data))
+```
+
+Fitting the model
+
+```{r}
+nrows <- nrow(hierarchical_data)
+stan_data = list(
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(hierarchical_data)
+)
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 10000)
+print(fit_hierarchical)
+```
+
+Check tree depth
+
+```{r}
+check_treedepth(fit_hierarchical)
+```
+
+Check the energy Bayesian Fraction of Missing Information
+
+```{r}
+rstan::check_energy(fit_hierarchical)
+```
+
+```{r}
+check_div(fit_hierarchical)
+```
+
+Run the posterior predictive checking on the fit
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
+loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+Although the posterior predictive chcking looks good, the fit had 2011 divergent transitions, and ALL 4 chains indicated pathological behaviour accordinng to E-BFMI.
+
+The model certainly has some issues, so let's try instead  the complementary non-centered parameterization (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html)
+
+
+```{stan, output.var="stan_model_ar_hierarchical"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  vector[N] y;
+}
+parameters {
+  real mu_group_alpha;
+  real mu_group_beta;
+  real<lower=0> tau_alpha; // prior std
+  real<lower=0> tau_beta; // prior std
+  vector[K] alpha_tilde;
+  vector[K] beta_tilde;
+  real<lower=0> sigma;
+}
+transformed parameters {
+  vector [N-K] mu;
+  vector[K] alpha;
+  vector[K] beta;
+  
+  for (i in 1:K) {
+    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
+    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
+  }
+  
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
+  mu_group_beta ~ normal(1, 1000); // weakly informative prior
+  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
+  tau_beta ~ cauchy(0, 5000); // weakly informative prior
+  sigma ~ cauchy(0, 5000); // weakly informative prior
+  
+  alpha_tilde ~ normal(0, 1);
+  beta_tilde ~ normal(0, 1);
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
+  }
+}
+generated quantities {
+  vector[N-K] log_lik;
+  vector[N-K] y_rep;
+  for (i in K+1:N) {
+    y_rep[i-K] = normal_rng(mu[i-K], sigma);
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  }
+}
+```
+
+```{r}
+nrows <- nrow(hierarchical_data)
+stan_data = list(
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(hierarchical_data)
+)
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 15000, control=list(adapt_delta=0.90))
+print(fit_hierarchical)
+```
+
+```{r}
+check_treedepth(fit_hierarchical)
+```
+
+```{r}
+rstan::check_energy(fit_hierarchical)
+```
+
+```{r}
+check_div(fit_hierarchical)
+```
+
+```{r}
+c_dark <- c("#8F272780")
+green <- c("#00FF0080")
+
+partition <- partition_div(fit_hierarchical)
+div_params <- partition[[1]]
+nondiv_params <- partition[[2]]
+
+par(mar = c(4, 4, 0.5, 0.5))
+plot(nondiv_params$'beta[7]', log(nondiv_params$tau_alpha),
+     col=c_dark, pch=16, cex=0.8, xlab="beta7", ylab="log(tau_beta)",
+     )
+points(div_params$'beta[7]', log(div_params$tau_alpha),
+       col=green, pch=16, cex=0.8)
+```
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+
+# number of rows = number of post-warmup posterior draws
+# number of columns = length(y)
+dim(y_rep) 
+```
+```{r}
+tail(c(t(hierarchical_data)), -11)
+plot(t[1:10])
+```
+
+```{r}
+y <- tail(c(hierarchical_data), -11)
+```
+
+```{r}
+plot(y[indexes])
+```
+
+
+```{r}
+indexes <- seq(1, length(y), 11)
+ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
+```
+
+*PSIS-LOO on the whole dataset*
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
+loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+We can see that there are 3 problematic datapoint. Let's try to identify what are they.
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+indexes <- seq(1, 99, 11)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
+loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+indexes <- seq(2, 99, 11)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
+loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+indexes <- seq(6, 99, 11)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
+loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+indexes <- seq(7, 99, 11)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
+loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+indexes <- seq(8, 99, 11)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
+loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+Thus, we figured out that the problem is caused by age group 7 and 8. 
+
+Now let's try another sensible but a little stronger informative prior, while keeping results of the previous fit as our base-line.
+
+```{stan, output.var="stan_model_ar_hierarchical"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  vector[N] y;
+}
+parameters {
+  real mu_group_alpha;
+  real mu_group_beta;
+  real<lower=0> tau_alpha; // prior std
+  real<lower=0> tau_beta; // prior std
+  vector[K] alpha_tilde;
+  vector[K] beta_tilde;
+  real<lower=0> sigma;
+}
+transformed parameters {
+  vector [N-K] mu;
+  vector[K] alpha;
+  vector[K] beta;
+  
+  for (i in 1:K) {
+    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
+    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
+  }
+  
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  mu_group_alpha ~ normal(0, 5000); // a bit stronger informative prior
+  mu_group_beta ~ normal(0, 1); //a bit stronger informative prior
+  tau_alpha ~ cauchy(0, 1000); //a bit stronger informative prior
+  tau_beta ~ cauchy(0, 1); // a bit stronger informative prior
+  sigma ~ cauchy(0, 1000); // a bit stronger informative prior
+  
+  alpha_tilde ~ normal(0, 1);
+  beta_tilde ~ normal(0, 1);
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
+  }
+}
+generated quantities {
+  vector[N-K] log_lik;
+  vector[N-K] y_rep;
+  for (i in K+1:N) {
+    y_rep[i-K] = normal_rng(mu[i-K], sigma);
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  }
+}
+```
+
+```{r}
+nrows <- nrow(hierarchical_data)
+stan_data = list(
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(hierarchical_data)
+)
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 10000, control=list(adapt_delta=0.90))
+print(fit_hierarchical)
+```
+
+```{r}
+check_treedepth(fit_hierarchical)
+```
+
+```{r}
+rstan::check_energy(fit_hierarchical)
+```
+
+```{r}
+check_div(fit_hierarchical)
+```
+
+```{r}
+c_dark <- c("#8F272780")
+green <- c("#00FF0080")
+
+partition <- partition_div(fit_hierarchical)
+div_params <- partition[[1]]
+nondiv_params <- partition[[2]]
+
+par(mar = c(4, 4, 0.5, 0.5))
+plot(nondiv_params$'beta[8]', log(nondiv_params$tau_alpha),
+     col=c_dark, pch=16, cex=0.8, xlab="beta[8]", ylab="log(tau_beta)",
+     )
+points(div_params$'beta[8]', log(div_params$tau_alpha),
+       col=green, pch=16, cex=0.8)
+```
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+
+# number of rows = number of post-warmup posterior draws
+# number of columns = length(y)
+dim(y_rep) 
+```
+
+```{r}
+y <- tail(c(hierarchical_data), -11)
+```
+
+```{r}
+plot(y[indexes])
+```
+
+
+```{r}
+indexes <- seq(1, length(y), 11)
+ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
+```
+
+*PSIS-LOO on the whole dataset*
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
+loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+
+// include proper prior, jusify
+
+// Rhat convergence diagnostics
+
+// HMC specific convergence diagnostics (divergences, tree depth)
+
+// ESS diagnostics
+
+// posterior predictive checking
+
+### Model 2
+
+```{stan, output.var="stan_model_ar_pooled"}
+data {
+  int<lower=0> N;
+  vector[N] y;
+}
+parameters {
+  real alpha;
+  real beta;
+  real<lower=0> sigma;
+}
+transformed parameters {
+  vector [N-1] mu;
+  
+  for (n in 2:N) {
+    mu[n-1] = alpha + beta * y[n-1];
+  }
+}
+model {
+  for (n in 2:N) {
+     y[n] ~ normal(mu[n-1], sigma);
+  }
+}
+generated quantities {
+  vector[N-1] log_lik;
+  for (i in 2:N)
+    log_lik[i-1] = normal_lpdf(y[i] | mu[i-1], sigma);
+}
+```
+
+```{r}
+pooled_data <- sapply(2009:2018, function (i) sum(filter(data, Year == i)$Number.of.victims))
+pooled_data
+```
+
+```{r}
+
+stan_data = list(
+  N = 2018-2009+1,
+  y = pooled_data
+)
+fit_pooled = sampling(stan_model_ar_pooled, data = stan_data, iter = 10000)
+print(fit_pooled)
+```
+
+
+
+```{r}
+samples_lin <- rstan::extract(fit_pooled, permuted = T)
+```
+
+```{r}
+samples_lin <- rstan::extract(fit_pooled, permuted = T)
+mu <- apply(samples_lin$mu, 2, quantile, c(0.05, 0.5, 0.95)) %>%
+t() %>% data.frame(x = seq(2010,2018), .) %>% gather(pct, y, -x)
+stan_data = list(x = seq(2010,2018), y = stan_data$y)
 pfit <- ggplot() +
-  geom_point(aes(Year, Number.of.victims), data = data_for_age_group, size = 1) +
-  geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') +
-  scale_linetype_manual(values = c(2,1,2)) +
-  labs(x = 'Year', y = 'Traffic deaths') +
-  guides(linetype = F)
-(pfit)
+geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
+labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
+guides(linetype = F)
+pfit
+```
+
+```{r}
+log_lik_pooled <- extract_log_lik(fit_pooled, merge_chains = FALSE)
+
+r_eff_pooled <- relative_eff(exp(log_lik_pooled)) 
+loo_pooled <- loo(log_lik_pooled, r_eff = r_eff_pooled)
+print(loo_pooled)
+plot(loo_pooled)
+```
+
+Let's make our priors more informative
+
+```{stan, output.var="stan_model_ar_hierarchical"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  vector[N] y;
+}
+parameters {
+  real mu_group_alpha;
+  real mu_group_beta;
+  real<lower=0> tau_alpha; // prior std
+  real<lower=0> tau_beta; // prior std
+  vector[K] alpha_tilde;
+  vector[K] beta_tilde;
+  real<lower=0> sigma;
+}
+transformed parameters {
+  vector [N-K] mu;
+  vector[K] alpha;
+  vector[K] beta;
+  
+  for (i in 1:K) {
+    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
+    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
+  }
+  
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
+  mu_group_beta ~ normal(1, 1000); // weakly informative prior
+  sigma ~ cauchy(0, 5000); // weakly informative prior
+  
+  alpha_tilde ~ normal(0, 1);
+  beta_tilde ~ normal(0, 1);
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
+  }
+}
+generated quantities {
+  vector[N-K] log_lik;
+  vector[N-K] y_rep;
+  for (i in K+1:N) {
+    y_rep[i-K] = normal_rng(mu[i-K], sigma);
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  }
+}
+```
+
+```{r}
+nrows <- nrow(hierarchical_data)
+stan_data = list(
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(hierarchical_data)
+)
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 10000)
+print(fit_hierarchical)
+```
+
+```{r}
+check_treedepth(fit_hierarchical)
+```
+
+```{r}
+rstan::check_energy(fit_hierarchical)
+```
+
+```{r}
+check_div(fit_hierarchical)
+```
+
+```{r}
+c_dark <- c("#8F272780")
+green <- c("#00FF0080")
+
+partition <- partition_div(fit_hierarchical)
+div_params <- partition[[1]]
+nondiv_params <- partition[[2]]
+
+par(mar = c(4, 4, 0.5, 0.5))
+plot(nondiv_params$'beta[3]', log(nondiv_params$tau_alpha),
+     col=c_dark, pch=16, cex=0.8, xlab="beta[3]", ylab="log(tau_beta)",
+     )
+points(div_params$'beta[3]', log(div_params$tau_alpha),
+       col=green, pch=16, cex=0.8)
+```
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+
+# number of rows = number of post-warmup posterior draws
+# number of columns = length(y)
+dim(y_rep) 
+```
+```{r}
+tail(c(t(hierarchical_data)), -11)
+plot(t[1:10])
+```
+
+```{r}
+y <- tail(c(hierarchical_data), -11)
+```
+
+```{r}
+plot(y[indexes])
 ```
 
 
+```{r}
+indexes <- seq(1, length(y), 11)
+ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
+```
+
+
+```{r}
+log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+
+r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
+loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+
+The model seems to perform way better accorfing to all indications. 
+
+// include proper prior, jusify
+
+// Rhat convergence diagnostics
+
+// HMC specific convergence diagnostics (divergences, tree depth)
+
+// ESS diagnostics
+
+// posterior predictive checking
+
+### Model 2
 
 ```{stan, output.var="stan_model_ar_pooled"}
 data {
@@ -181,85 +815,30 @@ plot(loo_pooled)
 ```
 
 
-```{stan, output.var="stan_model_ar_hierarchical"}
-data {
-  int<lower=0> N;
-  int<lower=0> K; // number of groups
-  int<lower=1,upper=K> x[N]; // group indicator
-  vector[N] y;
-}
-parameters {
-  real mu_group_alpha;
-  real mu_group_beta;
-  real<lower=0> tau_alpha; // prior std
-  real<lower=0> tau_beta; // prior std
-  vector[K] alpha;
-  vector[K] beta;
-  real<lower=0> sigma;
-}
-transformed parameters {
-  vector [N-K] mu;
-  
-  for (n in K+1:N) {
-    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
-  }
-}
-model {
-  alpha ~ normal(mu_group_alpha, tau_alpha);
-  beta ~ normal(mu_group_beta, tau_beta);
-  for (n in K+1:N) {
-     y[n] ~ normal(mu[n-K], sigma);
-  }
-}
-generated quantities {
-  vector[N-K] log_lik;
-  for (i in K+1:N)
-    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
-}
+
+### Model 3
+
+```{r}
+data_for_age_group <- filter(data, Victim.s.age == ageGroups[7])
+fit_lin <- stan_glm(Number.of.victims ~ Year, data = data_for_age_group , family="poisson",
+                refresh=1000, iter=1000, chains=4, seed=583829)
+print(fit_lin)
 ```
 
 ```{r}
-hierarchical_data <- sapply(2009:2018, function (j) sapply(1:11, function (i) filter(data, Victim.s.age == ageGroups[i] & Year == j)$Number.of.victims))
-hierarchical_data
+x_predict <- seq(2009,2020)
+N_predict <- length(x_predict)
+y_predict <- posterior_predict(fit_lin, newdata=data.frame(Year=x_predict))
+mu <- apply(t(y_predict), 1, quantile, c(0.05, 0.5, 0.95)) %>%
+  t() %>% data.frame(x = x_predict, .) %>% gather(pct, y, -x)
+pfit <- ggplot() +
+  geom_point(aes(Year, Number.of.victims), data = data_for_age_group, size = 1) +
+  geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') +
+  scale_linetype_manual(values = c(2,1,2)) +
+  labs(x = 'Year', y = 'Traffic deaths') +
+  guides(linetype = F)
+(pfit)
 ```
-
-```{r}
-rep(1:nrow(hierarchical_data), ncol(hierarchical_data))
-```
-
-```{r}
-nrows <- nrow(hierarchical_data)
-stan_data = list(
-  N = (2018-2009+1) * 11,
-  K = 11,
-  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
-  y = c(t(hierarchical_data))
-)
-fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, iter = 10000)
-print(fit_hierarchical)
-```
-
-
-```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
-loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
-```
-
-// include proper prior, jusify
-
-// Rhat convergence diagnostics
-
-// HMC specific convergence diagnostics (divergences, tree depth)
-
-// ESS diagnostics
-
-// posterior predictive checking
-
-### Model 2
 
 // include proper prior, jusify
 
