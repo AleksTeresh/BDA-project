@@ -743,77 +743,115 @@ The model seems to perform way better accorfing to all indications.
 
 ### Model 2
 
-```{stan, output.var="stan_model_ar_pooled"}
+```{stan, output.var="stan_model_ar_separate"}
 data {
   int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
   vector[N] y;
 }
 parameters {
-  real alpha;
-  real beta;
+  vector[K] alpha;
+  vector[K] beta;
   real<lower=0> sigma;
 }
 transformed parameters {
-  vector [N-1] mu;
-  
-  for (n in 2:N) {
-    mu[n-1] = alpha + beta * y[n-1];
+  vector [N-K] mu;
+
+  for (n in K+1:N) {
+    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
 model {
-  for (n in 2:N) {
-     y[n] ~ normal(mu[n-1], sigma);
+  sigma ~ cauchy(0, 5000); // weakly informative prior
+  alpha ~ normal(0, 10000);
+  beta ~ normal(0, 100);
+  
+  for (n in K+1:N) {
+     y[n] ~ normal(mu[n-K], sigma);
   }
 }
 generated quantities {
-  vector[N-1] log_lik;
-  for (i in 2:N)
-    log_lik[i-1] = normal_lpdf(y[i] | mu[i-1], sigma);
+  vector[N-K] log_lik;
+  vector[N-K] y_rep;
+  for (i in K+1:N) {
+    y_rep[i-K] = normal_rng(mu[i-K], sigma);
+    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  }
 }
 ```
 
 ```{r}
-pooled_data <- sapply(2009:2018, function (i) sum(filter(data, Year == i)$Number.of.victims))
-pooled_data
-```
-
-```{r}
-
+nrows <- nrow(hierarchical_data)
 stan_data = list(
-  N = 2018-2009+1,
-  y = pooled_data
+  N = (2018-2009+1) * 11,
+  K = 11,
+  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
+  y = c(hierarchical_data)
 )
-fit_pooled = sampling(stan_model_ar_pooled, data = stan_data, iter = 10000)
-print(fit_pooled)
-```
-
-
-
-```{r}
-samples_lin <- rstan::extract(fit_pooled, permuted = T)
+fit_separate = sampling(stan_model_ar_separate, data = stan_data, seed = SEED, iter = 10000)
+print(fit_separate)
 ```
 
 ```{r}
-samples_lin <- rstan::extract(fit_pooled, permuted = T)
-mu <- apply(samples_lin$mu, 2, quantile, c(0.05, 0.5, 0.95)) %>%
-t() %>% data.frame(x = seq(2010,2018), .) %>% gather(pct, y, -x)
-stan_data = list(x = seq(2010,2018), y = stan_data$y)
-pfit <- ggplot() +
-geom_point(aes(x, y), data = data.frame(stan_data), size = 1) + geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') + scale_linetype_manual(values = c(2,1,2)) +
-labs(y = 'Summer temp. @Kilpisjärvi', x= "Year") +
-guides(linetype = F)
-pfit
+check_treedepth(fit_separate)
 ```
 
 ```{r}
-log_lik_pooled <- extract_log_lik(fit_pooled, merge_chains = FALSE)
-
-r_eff_pooled <- relative_eff(exp(log_lik_pooled)) 
-loo_pooled <- loo(log_lik_pooled, r_eff = r_eff_pooled)
-print(loo_pooled)
-plot(loo_pooled)
+rstan::check_energy(fit_separate)
 ```
 
+```{r}
+check_div(fit_separate)
+```
+
+```{r}
+c_dark <- c("#8F272780")
+green <- c("#00FF0080")
+
+partition <- partition_div(fit_separate)
+div_params <- partition[[1]]
+nondiv_params <- partition[[2]]
+
+par(mar = c(4, 4, 0.5, 0.5))
+plot(nondiv_params$'beta[3]', log(nondiv_params$tau_alpha),
+     col=c_dark, pch=16, cex=0.8, xlab="beta[3]", ylab="log(tau_beta)",
+     )
+points(div_params$'beta[3]', log(div_params$tau_alpha),
+       col=green, pch=16, cex=0.8)
+```
+
+```{r}
+y_rep <- as.matrix(fit_separate, pars = "y_rep")
+
+# number of rows = number of post-warmup posterior draws
+# number of columns = length(y)
+dim(y_rep) 
+```
+
+```{r}
+y <- tail(c(hierarchical_data), -11)
+```
+
+```{r}
+plot(y[indexes])
+```
+
+
+```{r}
+indexes <- seq(1, length(y), 11)
+ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
+```
+
+
+```{r}
+log_lik_separate <- extract_log_lik(fit_separate, merge_chains = FALSE)
+
+r_eff_separate <- relative_eff(exp(log_lik_separate)) 
+loo_separate <- loo(log_lik_separate, r_eff = r_eff_separate)
+print(loo_separate)
+plot(loo_separate)
+```
 
 
 ### Model 3
