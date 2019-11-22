@@ -854,30 +854,6 @@ plot(loo_separate)
 ```
 
 
-### Model 3
-
-```{r}
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[7])
-fit_lin <- stan_glm(Number.of.victims ~ Year, data = data_for_age_group , family="poisson",
-                refresh=1000, iter=1000, chains=4, seed=583829)
-print(fit_lin)
-```
-
-```{r}
-x_predict <- seq(2009,2020)
-N_predict <- length(x_predict)
-y_predict <- posterior_predict(fit_lin, newdata=data.frame(Year=x_predict))
-mu <- apply(t(y_predict), 1, quantile, c(0.05, 0.5, 0.95)) %>%
-  t() %>% data.frame(x = x_predict, .) %>% gather(pct, y, -x)
-pfit <- ggplot() +
-  geom_point(aes(Year, Number.of.victims), data = data_for_age_group, size = 1) +
-  geom_line(aes(x, y, linetype = pct), data = mu, color = 'red') +
-  scale_linetype_manual(values = c(2,1,2)) +
-  labs(x = 'Year', y = 'Traffic deaths') +
-  guides(linetype = F)
-(pfit)
-```
-
 // include proper prior, jusify
 
 // Rhat convergence diagnostics
