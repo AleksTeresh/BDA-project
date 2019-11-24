@@ -48,6 +48,7 @@ Below are scatter plots for each of the age groups
 
 ```{r}
 ageGroups <- unique(data$Victim.s.age)
+print(ageGroups)
 grouped_data <- c()
 
 data_for_age_group <- filter(data, Victim.s.age == ageGroups[1])
@@ -116,7 +117,7 @@ parameters {
   real<lower=0> sigma;
 }
 transformed parameters {
-  vector [N-K] mu;
+  real<lower=0> mu[N-K];
   
   for (n in K+1:N) {
     mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
@@ -147,14 +148,6 @@ Preparing the data
 ```{r}
 hierarchical_data <- sapply(2009:2018, function (j) sapply(1:11, function (i) filter(data, Victim.s.age == ageGroups[i] & Year == j)$Number.of.victims))
 hierarchical_data
-```
-
-```{r}
-c(hierarchical_data)
-```
-
-```{r}
-rep(1:nrow(hierarchical_data), ncol(hierarchical_data))
 ```
 
 Fitting the model
@@ -198,7 +191,7 @@ print(loo_hierarchical)
 plot(loo_hierarchical)
 ```
 
-Although the posterior predictive chcking looks good, the fit had 2011 divergent transitions, and ALL 4 chains indicated pathological behaviour accordinng to E-BFMI.
+Although the posterior predictive chcking looks good, the fit had 1228 divergent transitions, and ALL 4 chains indicated pathological behaviour accordinng to E-BFMI.
 
 The model certainly has some issues, so let's try instead  the complementary non-centered parameterization (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html)
 
@@ -208,7 +201,8 @@ data {
   int<lower=0> N;
   int<lower=0> K; // number of groups
   int<lower=1,upper=K> x[N]; // group indicator
-  vector[N] y;
+  int<lower=0> y[N];
+  int<lower=0> y0[K];
 }
 parameters {
   real mu_group_alpha;
@@ -217,59 +211,66 @@ parameters {
   real<lower=0> tau_beta; // prior std
   vector[K] alpha_tilde;
   vector[K] beta_tilde;
-  real<lower=0> sigma;
 }
 transformed parameters {
-  vector [N-K] mu;
-  vector[K] alpha;
-  vector[K] beta;
+  real<lower=0> mu[N];
+  real alpha[K];
+  real beta[K];
   
   for (i in 1:K) {
     alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
     beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
   }
   
+  for (n in 1:K) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
+  }
   for (n in K+1:N) {
-    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
 model {
   mu_group_alpha ~ normal(0, 100000); // weakly informative prior
-  mu_group_beta ~ normal(1, 1000); // weakly informative prior
+  mu_group_beta ~ normal(0, 1000); // weakly informative prior
   tau_alpha ~ cauchy(0, 5000); // weakly informative prior
   tau_beta ~ cauchy(0, 5000); // weakly informative prior
-  sigma ~ cauchy(0, 5000); // weakly informative prior
   
   alpha_tilde ~ normal(0, 1);
   beta_tilde ~ normal(0, 1);
-  for (n in K+1:N) {
-     y[n] ~ normal(mu[n-K], sigma);
+  for (n in 1:N) {
+     y[n] ~ poisson(mu[n]);
   }
 }
 generated quantities {
-  vector[N-K] log_lik;
-  vector[N-K] y_rep;
-  for (i in K+1:N) {
-    y_rep[i-K] = normal_rng(mu[i-K], sigma);
-    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  vector[N] log_lik;
+  // vector[N-K] y_rep;
+  for (i in 1:N) {
+    // y_rep[i-K] = normal_rng(mu[i-K], sigma);
+    log_lik[i] = poisson_lpmf(y[i] | mu[i]);
   }
 }
+```
+
+
+```{r}
+(2018-2010+1) * 11
 ```
 
 ```{r}
 nrows <- nrow(hierarchical_data)
 stan_data = list(
-  N = (2018-2009+1) * 11,
+  N = (2018-2010+1) * 11,
   K = 11,
-  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
-  y = c(hierarchical_data)
+  x = rep(1:nrow(hierarchical_data), 9),
+  y = tail(c(hierarchical_data), -11),
+  y0 = head(c(hierarchical_data), 11)
 )
-fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 15000, control=list(adapt_delta=0.90))
+fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, iter = 15000, control=list(max_treedepth=15))
 print(fit_hierarchical)
 ```
 
 ```{r}
-check_treedepth(fit_hierarchical)
+check_treedepth(fit_hierarchical, 15)
 ```
 
 ```{r}
@@ -313,19 +314,41 @@ y <- tail(c(hierarchical_data), -11)
 ```
 
 ```{r}
+indexes <- seq(1, 99, 11)
+indexes
+```
+
+```{r}
+indexes <- seq(1, 99, 11)
+samples_poisson <- rstan::extract(fit_hierarchical, permuted = T)
+mu <- apply(samples_poisson$mu, 2, quantile, c(0.05, 0.5, 0.95))
+mu_means <- mu[2,]
+plot(mu_means[indexes])
+# plot(mu_means)
+```
+
+```{r}
+# length(y)
 plot(y[indexes])
 ```
 
 
-```{r}
-indexes <- seq(1, length(y), 11)
-ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
-```
-
 *PSIS-LOO on the whole dataset*
 
+
 ```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+# log_lik_hierarchical_all <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+dim(fit_hierarchical)
+```
+
+
+```{r}
+N <- 99
+L <- 11 * 2
+# indexes <- seq(2, 99, 11)
+
+log_lik_hierarchical_all <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+log_lik_hierarchical <- log_lik_hierarchical_all[, , (L+1):N]
 
 r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
 loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
@@ -333,57 +356,22 @@ print(loo_hierarchical)
 plot(loo_hierarchical)
 ```
 
-We can see that there are 3 problematic datapoint. Let's try to identify what are they.
 
 ```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-indexes <- seq(1, 99, 11)
-
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
-loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
+samples_poisson <- rstan::extract(fit_hierarchical, permuted = T)
+loglik_exact <- matrix(nrow = length(samples_poisson), ncol = N)
 ```
 
 ```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-indexes <- seq(2, 99, 11)
 
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
-loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
+for (i in N:max(L + 1, 2)) {
+  fit_i <- update(fit_hierarchical, newdata = df[-(i:N), ], recompile = FALSE)
+  loglik_exact[, i] <- log_lik(fit_i, newdata = df[1:i, ])[, i]
+}
 ```
 
-```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-indexes <- seq(6, 99, 11)
 
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
-loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
-```
 
-```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-indexes <- seq(7, 99, 11)
-
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
-loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
-```
-
-```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
-indexes <- seq(8, 99, 11)
-
-r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical[, , indexes])) 
-loo_hierarchical<- loo(log_lik_hierarchical[, , indexes], r_eff = r_eff_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
-```
 
 Thus, we figured out that the problem is caused by age group 7 and 8. 
 
