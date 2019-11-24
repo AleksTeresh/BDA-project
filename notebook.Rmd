@@ -98,6 +98,105 @@ SEED <- 1474652
 
 ### Model 1
 
+#### Prior predictive checking
+
+```{r}
+hierarchical_data[2,1]
+```
+
+```{r}
+
+```
+
+```{r}
+j = 1
+for (q in 1:N) {
+  # print(tau_alpha[q] > 0 && tau_beta[q] > 0)
+  if (tau_alpha[q] > 0 && tau_beta[q] > 0) {
+    alpha = rnorm(1, mu_group_alpha[q], tau_alpha[q])
+    beta = rnorm(1, mu_group_beta[q], tau_beta[q])
+  
+  for (i in 2:10) { # number of years
+    mu = alpha + beta * hierarchical_data[j, i-1]
+    # print(mu)
+    if (mu > 0) {
+      y_pred = rpois(1, mu)
+      y_pred_prior[q, j, i-1] = y_pred
+    }
+  }
+}
+
+}
+y_pred_prior[q, j, i-1] 
+```
+  
+```{r}
+
+N = 1000
+K = 11
+D = 10
+
+counter = 0
+
+y_pred_prior = array(rep(1, 365*5*4), dim=c(N, K, D-1))
+
+for (j in 1:11) { # number of age groups
+  mu_group_alpha = rnorm(N, 0, 10000)
+  mu_group_beta = rnorm(N, 0, 2)
+    
+  for (q in 1:N) {
+    while (TRUE) {
+      tau_alpha = rcauchy(1, 0, 500)
+      tau_beta = rcauchy(1, 0, 1)
+      
+      while (tau_alpha < 0 || tau_beta < 0) {
+        tau_alpha = rcauchy(1, 0, 500)
+        tau_beta = rcauchy(1, 0, 1)
+      }
+      
+      alpha = rnorm(1, mu_group_alpha[q], tau_alpha)
+      beta = rnorm(1, mu_group_beta[q], tau_beta)
+      passed = TRUE
+      for (i in 2:10) { # number of years
+        mu = alpha + beta * hierarchical_data[j, i-1]
+        if (mu < 0) {
+          passed = FALSE
+          break
+        }
+      }
+      
+      if (passed) {
+        break
+      }
+    }
+    # print(paste0("a ", alpha))
+    # print(paste0("b ", mu_group_beta[q], "  ", tau_beta))
+    for (i in 2:10) { # number of years
+      mu = alpha + beta * hierarchical_data[j, i-1]
+      
+      if (mu > 0) {
+        y_pred = rpois(1, mu)
+        
+        if (y_pred > 2000000) {
+          counter = counter + 1
+        }
+        # print(y_pred)
+        y_pred_prior[q, j, i-1] <- y_pred
+      }
+    }
+  }
+}
+
+counter / (N * K * (D - 1))
+```
+
+```{R}
+hist(y_pred_prior)
+```
+
+
+No values exceeded 1000000, which is 1/5 population of Finland. Thus, the prior makes sense
+
 *The centered parameterization of our hierarchical model.*
 
 ```{stan, output.var="stan_model_ar_hierarchical"}
@@ -230,10 +329,10 @@ transformed parameters {
   }
 }
 model {
-  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
-  mu_group_beta ~ normal(0, 1000); // weakly informative prior
-  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
-  tau_beta ~ cauchy(0, 5000); // weakly informative prior
+  mu_group_alpha ~ normal(0, 10000); // weakly informative prior
+  mu_group_beta ~ normal(0, 2); // weakly informative prior
+  tau_alpha ~ cauchy(0, 500); // weakly informative prior
+  tau_beta ~ cauchy(0, 1); // weakly informative prior
   
   alpha_tilde ~ normal(0, 1);
   beta_tilde ~ normal(0, 1);
