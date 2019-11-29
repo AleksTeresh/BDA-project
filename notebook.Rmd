@@ -56,39 +56,16 @@ ageGroups <- unique(data$Victim.s.age)
 print(ageGroups)
 grouped_data <- c()
 
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[1])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
+plots <- lapply(
+  seq(1, 11),
+  function(i) {
+    data_for_age_group <- filter(data, Victim.s.age == ageGroups[i])
+    ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
+      geom_point(size = 1)  + geom_smooth()  
+  }
+)
 
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[2])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[3])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[4])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[5])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[6])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[7])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[8])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[9])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[10])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
-data_for_age_group <- filter(data, Victim.s.age == ageGroups[11])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
-
+plots
 ```
 
 ## Analysis problem
