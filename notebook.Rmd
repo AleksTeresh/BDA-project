@@ -6,17 +6,19 @@ output: pdf_document
 # Loaded packages
 
 ```{r, echo=TRUE}
-library(tidyr)
-library(dplyr)
-library(rstan)
-library(rstanarm)
-library(bayesplot)
-library(aaltobda)
-options(mc.cores = parallel::detectCores())
-library(loo)
-library(ggplot2)
-library(gridExtra)
-library(bayesplot)
+suppressPackageStartupMessages({
+  library(tidyr)
+  library(dplyr)
+  library(rstan)
+  library(rstanarm)
+  library(bayesplot)
+  library(aaltobda)
+  options(mc.cores = parallel::detectCores())
+  library(loo)
+  library(ggplot2)
+  library(gridExtra)
+  library(bayesplot)
+})
 ```
 
 # Introduction
@@ -39,6 +41,9 @@ data = read.csv("dataset.csv", header = TRUE, sep=";")
 data
 ```
 
+Below are some utility functions copied from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R.
+The functions are used later mainly for doing model diagnostics of different kinds 
+
 ```{r}
 source('stan_utility.R')
 lsf.str()
@@ -58,7 +63,7 @@ data_for_age_group <- filter(data, Victim.s.age == ageGroups[2])
 ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
 
 data_for_age_group <- filter(data, Victim.s.age == ageGroups[3])
-ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
+ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()
 
 data_for_age_group <- filter(data, Victim.s.age == ageGroups[4])
 ggplot(aes(Year, Number.of.victims), data = data_for_age_group) + geom_point(size = 1)  + geom_smooth()  
