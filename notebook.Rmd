@@ -310,6 +310,7 @@ data {
   real<lower=0> mu_group_beta_prior_sd;
   real<lower=0> tau_alpha_prior_sd;
   real<lower=0> tau_beta_prior_sd;
+  int<lower=0, upper=1> use_lfo_cv;
 }
 parameters {
   real mu_group_alpha;
@@ -320,7 +321,8 @@ parameters {
   vector[K] beta_tilde;
 }
 transformed parameters {
-  real<lower=0> mu[N];
+  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
+  
   real alpha[K];
   real beta[K];
   
@@ -332,7 +334,8 @@ transformed parameters {
   for (n in 1:K) {
     mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
   }
-  for (n in K+1:N) {
+  
+  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
     mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
@@ -344,17 +347,34 @@ model {
   
   alpha_tilde ~ normal(0, 1);
   beta_tilde ~ normal(0, 1);
-  for (n in 1:N) {
+  
+  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
      y[n] ~ poisson(mu[n]);
   }
 }
 generated quantities {
   vector[N] log_lik;
-  vector[N] y_rep;
+  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
   
-  for (i in 1:N) {
-    y_rep[i] = poisson_rng(mu[i]);
-    log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+  if (use_lfo_cv) {
+    for (n in 1:K) {
+      mu_pred[n] = alpha[n] + beta[n] * y[(N - (1 * K)) - K + n];
+    }
+    
+    for (i in 1:(N - (1 * K))) {
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+    
+    for (i in 1:K) {
+      log_lik[(N - (1 * K)) + i] = poisson_lpmf(y[(N - (1 * K)) + i] | mu_pred[i]);
+    }
+  } else {
+    vector[N] y_rep;
+    
+    for (i in 1:N) {
+      y_rep[i] = poisson_rng(mu[i]);
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
   }
 }
 ```
@@ -368,7 +388,12 @@ stan_data = list(
   K = 11,
   x = rep(1:nrow(hierarchical_data), 9),
   y = tail(c(hierarchical_data), -11),
-  y0 = head(c(hierarchical_data), 11)
+  y0 = head(c(hierarchical_data), 11),
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 2,
+  tau_alpha_prior_sd = 200,
+  tau_beta_prior_sd = 2,
+  use_lfo_cv = 0 
 )
 fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, chains = 7, iter = 6000, control=list(max_treedepth=15))
 print(fit_hierarchical)
@@ -425,70 +450,6 @@ print(loo_hierarchical)
 plot(loo_hierarchical)
 ```
 
-```{stan, output.var="stan_model_ar_hierarchical_cv"}
-data {
-  int<lower=0> N;
-  int<lower=0> K; // number of groups
-  int<lower=1,upper=K> x[N]; // group indicator
-  int<lower=0> y[N];
-  int<lower=0> y0[K];
-}
-parameters {
-  real mu_group_alpha;
-  real mu_group_beta;
-  real<lower=0> tau_alpha; // prior std
-  real<lower=0> tau_beta; // prior std
-  vector[K] alpha_tilde;
-  vector[K] beta_tilde;
-}
-transformed parameters {
-  real<lower=0> mu[N-K];
-  real alpha[K];
-  real beta[K];
-  
-  for (i in 1:K) {
-    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
-    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
-  }
-  
-  for (n in 1:K) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
-  }
-  for (n in K+1:(N - (1 * K))) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
-  }
-}
-model {
-  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
-  mu_group_beta ~ normal(0, 1000); // weakly informative prior
-  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
-  tau_beta ~ cauchy(0, 5000); // weakly informative prior
-  
-  alpha_tilde ~ normal(0, 1);
-  beta_tilde ~ normal(0, 1);
-  for (n in 1:(N - (1 * K))) {
-     y[n] ~ poisson(mu[n]);
-  }
-}
-  
-generated quantities {
-  vector[N] log_lik;
-  real<lower=0> mu_pred[K];
-  
-  for (n in 1:K) {
-    mu_pred[n] = alpha[n] + beta[n] * y[(N - (1 * K)) - K + n];
-  }
-  
-  for (i in 1:(N - (1 * K))) {
-    log_lik[i] = poisson_lpmf(y[i] | mu[i]);
-  }
-  
-  for (i in 1:K) {
-    log_lik[(N - (1 * K)) + i] = poisson_lpmf(y[(N - (1 * K)) + i] | mu_pred[i]);
-  }
-}
-```
-
 The code below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html
 
 
@@ -506,9 +467,14 @@ for (i in seq(N, L+1, -1)) {
     K = 11,
     x = rep(1:nrow(hierarchical_data_i), i - 1),
     y = tail(c(hierarchical_data_i), -11),
-    y0 = head(c(hierarchical_data_i), 11)
+    y0 = head(c(hierarchical_data_i), 11),
+    mu_group_alpha_prior_sd = 10000,
+    mu_group_beta_prior_sd = 2,
+    tau_alpha_prior_sd = 200,
+    tau_beta_prior_sd = 2,
+    use_lfo_cv = 1
   )
-  fit_i = sampling(stan_model_ar_hierarchical_cv, data = stan_data_i, seed = 12452, refresh=0, iter = 5000, control=list(max_treedepth=15))
+  fit_i = sampling(stan_model_ar_hierarchical, data = stan_data_i, seed = 12452, refresh=0, iter = 5000, control=list(max_treedepth=15))
   last_K_values <- seq(((i-2) * K + 1), ((i - 1) * K))
   loglik_exact[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
 }
