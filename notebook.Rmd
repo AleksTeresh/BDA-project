@@ -21,6 +21,10 @@ suppressPackageStartupMessages({
 })
 ```
 
+```{r}
+SEED <- 1474652
+```
+
 # Introduction
 
 // this part has to be inviting xD
@@ -71,11 +75,6 @@ plots
 ## Analysis problem
 
 ## Models
-
-```{r}
-SEED <- 1474652
-```
-
 // add a clear list of models
 
 ### Model 1
