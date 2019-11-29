@@ -579,61 +579,9 @@ ppc_ribbon(c(hierarchical_data[group_idx, (2:10)]), y_rep[, indexes])
 
 Thus, we figured out that the problem is caused by age group 7 and 8. 
 
+### Prior sensitivity analysis
+
 Now let's try another sensible but a little stronger informative prior, while keeping results of the previous fit as our base-line.
-
-```{stan, output.var="stan_model_ar_hierarchical"}
-data {
-  int<lower=0> N;
-  int<lower=0> K; // number of groups
-  int<lower=1,upper=K> x[N]; // group indicator
-  vector[N] y;
-}
-parameters {
-  real mu_group_alpha;
-  real mu_group_beta;
-  real<lower=0> tau_alpha; // prior std
-  real<lower=0> tau_beta; // prior std
-  vector[K] alpha_tilde;
-  vector[K] beta_tilde;
-  real<lower=0> sigma;
-}
-transformed parameters {
-  vector [N-K] mu;
-  vector[K] alpha;
-  vector[K] beta;
-  
-  for (i in 1:K) {
-    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
-    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
-  }
-  
-  for (n in K+1:N) {
-    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
-  }
-}
-model {
-  mu_group_alpha ~ normal(0, 5000); // a bit stronger informative prior
-  mu_group_beta ~ normal(0, 1); //a bit stronger informative prior
-  tau_alpha ~ cauchy(0, 1000); //a bit stronger informative prior
-  tau_beta ~ cauchy(0, 1); // a bit stronger informative prior
-  sigma ~ cauchy(0, 1000); // a bit stronger informative prior
-  
-  alpha_tilde ~ normal(0, 1);
-  beta_tilde ~ normal(0, 1);
-  for (n in K+1:N) {
-     y[n] ~ normal(mu[n-K], sigma);
-  }
-}
-generated quantities {
-  vector[N-K] log_lik;
-  vector[N-K] y_rep;
-  for (i in K+1:N) {
-    y_rep[i-K] = normal_rng(mu[i-K], sigma);
-    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
-  }
-}
-```
-
 ```{r}
 nrows <- nrow(hierarchical_data)
 stan_data = list(
