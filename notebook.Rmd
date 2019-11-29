@@ -296,7 +296,7 @@ plot(loo_hierarchical)
 
 Although the posterior predictive chcking looks good, the fit had 1228 divergent transitions, and ALL 4 chains indicated pathological behaviour accordinng to E-BFMI.
 
-The model certainly has some issues, so let's try instead  the complementary non-centered parameterization (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html)
+The model certainly has some issues, so let's try instead  the complementary non-centered parameterization (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html and here https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html)
 
 
 ```{stan, output.var="stan_model_ar_hierarchical"}
@@ -306,6 +306,10 @@ data {
   int<lower=1,upper=K> x[N]; // group indicator
   int<lower=0> y[N];
   int<lower=0> y0[K];
+  real<lower=0> mu_group_alpha_prior_sd;
+  real<lower=0> mu_group_beta_prior_sd;
+  real<lower=0> tau_alpha_prior_sd;
+  real<lower=0> tau_beta_prior_sd;
 }
 parameters {
   real mu_group_alpha;
@@ -333,10 +337,10 @@ transformed parameters {
   }
 }
 model {
-  mu_group_alpha ~ normal(0, 20000); // weakly informative prior
-  mu_group_beta ~ normal(0, 5); // weakly informative prior
-  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
-  tau_beta ~ cauchy(0, 5); // weakly informative prior
+  mu_group_alpha ~ normal(0, mu_group_alpha_prior_sd); // prior
+  mu_group_beta ~ normal(0, mu_group_beta_prior_sd); // weakly informative prior
+  tau_alpha ~ cauchy(0, tau_alpha_prior_sd); // weakly informative prior
+  tau_beta ~ cauchy(0, tau_beta_prior_sd); // weakly informative prior
   
   alpha_tilde ~ normal(0, 1);
   beta_tilde ~ normal(0, 1);
