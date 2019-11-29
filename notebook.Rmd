@@ -103,36 +103,10 @@ SEED <- 1474652
 ```{r}
 hierarchical_data[2,1]
 ```
-
-```{r}
-
-```
-
-```{r}
-j = 1
-for (q in 1:N) {
-  # print(tau_alpha[q] > 0 && tau_beta[q] > 0)
-  if (tau_alpha[q] > 0 && tau_beta[q] > 0) {
-    alpha = rnorm(1, mu_group_alpha[q], tau_alpha[q])
-    beta = rnorm(1, mu_group_beta[q], tau_beta[q])
-  
-  for (i in 2:10) { # number of years
-    mu = alpha + beta * hierarchical_data[j, i-1]
-    # print(mu)
-    if (mu > 0) {
-      y_pred = rpois(1, mu)
-      y_pred_prior[q, j, i-1] = y_pred
-    }
-  }
-}
-
-}
-y_pred_prior[q, j, i-1] 
-```
   
 ```{r}
 
-N = 1000
+N = 3000
 K = 11
 D = 10
 
@@ -141,17 +115,17 @@ counter = 0
 y_pred_prior = array(rep(1, 365*5*4), dim=c(N, K, D-1))
 
 for (j in 1:11) { # number of age groups
-  mu_group_alpha = rnorm(N, 0, 10000)
-  mu_group_beta = rnorm(N, 0, 2)
+  mu_group_alpha = rnorm(N, 0, 20000) # based on previous studies
+  mu_group_beta = rnorm(N, 0, 5) # based on previous studies
     
   for (q in 1:N) {
     while (TRUE) {
-      tau_alpha = rcauchy(1, 0, 500)
-      tau_beta = rcauchy(1, 0, 1)
+      tau_alpha = rcauchy(1, 0, 5000)
+      tau_beta = rcauchy(1, 0, 5)
       
       while (tau_alpha < 0 || tau_beta < 0) {
-        tau_alpha = rcauchy(1, 0, 500)
-        tau_beta = rcauchy(1, 0, 1)
+        tau_alpha = rcauchy(1, 0, 5000)
+        tau_beta = rcauchy(1, 0, 5)
       }
       
       alpha = rnorm(1, mu_group_alpha[q], tau_alpha)
@@ -177,7 +151,7 @@ for (j in 1:11) { # number of age groups
       if (mu > 0) {
         y_pred = rpois(1, mu)
         
-        if (y_pred > 2000000) {
+        if (y_pred > 1000000) {
           counter = counter + 1
         }
         # print(y_pred)
@@ -190,8 +164,12 @@ for (j in 1:11) { # number of age groups
 counter / (N * K * (D - 1))
 ```
 
+```{r}
+
+```
+
 ```{R}
-hist(y_pred_prior)
+hist(y_pred_prior[y_pred_prior < 100000], col = 'skyblue3')
 ```
 
 
@@ -204,7 +182,8 @@ data {
   int<lower=0> N;
   int<lower=0> K; // number of groups
   int<lower=1,upper=K> x[N]; // group indicator
-  vector[N] y;
+  int<lower=0> y[N];
+  int<lower=0> y0[K];
 }
 parameters {
   real mu_group_alpha;
@@ -213,32 +192,35 @@ parameters {
   real<lower=0> tau_beta; // prior std
   vector[K] alpha;
   vector[K] beta;
-  real<lower=0> sigma;
 }
 transformed parameters {
-  real<lower=0> mu[N-K];
+  real<lower=0> mu[N];
   
+  for (n in 1:K) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
+  }
   for (n in K+1:N) {
-    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
 model {
-  mu_group_alpha ~ normal(0, 100000); // weakly informative prior
-  mu_group_beta ~ normal(1, 1000); // weakly informative prior
+  mu_group_alpha ~ normal(0, 20000); // weakly informative prior
+  mu_group_beta ~ normal(0, 5); // weakly informative prior
   tau_alpha ~ cauchy(0, 5000); // weakly informative prior
-  tau_beta ~ cauchy(0, 5000); // weakly informative prior
-  sigma ~ cauchy(0, 5000); // weakly informative prior
+  tau_beta ~ cauchy(0, 5); // weakly informative prior
   
   alpha ~ normal(mu_group_alpha, tau_alpha);
   beta ~ normal(mu_group_beta, tau_beta);
-  for (n in K+1:N) {
-     y[n] ~ normal(mu[n-K], sigma);
+  for (n in 1:N) {
+     y[n] ~ poisson(mu[n]);
   }
 }
 generated quantities {
-  vector[N-K] log_lik;
-  for (i in K+1:N)
-    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  vector[N] log_lik;
+  
+  for (i in 1:N) {
+    log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+  }
 }
 ```
 
@@ -254,12 +236,13 @@ Fitting the model
 ```{r}
 nrows <- nrow(hierarchical_data)
 stan_data = list(
-  N = (2018-2009+1) * 11,
+  N = (2018-2010+1) * 11,
   K = 11,
-  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
-  y = c(hierarchical_data)
+  x = rep(1:nrow(hierarchical_data), 9),
+  y = tail(c(hierarchical_data), -11),
+  y0 = head(c(hierarchical_data), 11)
 )
-fit_hierarchical = sampling(stan_model_ar_hierarchical, SEED <- 1141, data = stan_data, seed = SEED, iter = 10000)
+fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, iter = 5000, control=list(max_treedepth=15))
 print(fit_hierarchical)
 ```
 
@@ -329,10 +312,10 @@ transformed parameters {
   }
 }
 model {
-  mu_group_alpha ~ normal(0, 10000); // weakly informative prior
-  mu_group_beta ~ normal(0, 2); // weakly informative prior
-  tau_alpha ~ cauchy(0, 500); // weakly informative prior
-  tau_beta ~ cauchy(0, 1); // weakly informative prior
+  mu_group_alpha ~ normal(0, 20000); // weakly informative prior
+  mu_group_beta ~ normal(0, 5); // weakly informative prior
+  tau_alpha ~ cauchy(0, 5000); // weakly informative prior
+  tau_beta ~ cauchy(0, 5); // weakly informative prior
   
   alpha_tilde ~ normal(0, 1);
   beta_tilde ~ normal(0, 1);
@@ -362,7 +345,7 @@ stan_data = list(
   y = tail(c(hierarchical_data), -11),
   y0 = head(c(hierarchical_data), 11)
 )
-fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, iter = 5000, control=list(max_treedepth=15))
+fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, chains = 7, iter = 6000, control=list(max_treedepth=15))
 print(fit_hierarchical)
 ```
 
@@ -405,7 +388,7 @@ dim(fit_hierarchical)
 
 ```{r}
 N <- 99
-L <- 11 * 3 # fit_hierarchical does not have the first year already, so we only need to remove 3 years from teh beginning
+L <- 11 * 3 # fit_hierarchical does not have the first year already, so we only need to remove 3 years from the beginning
 # indexes <- seq(2, 99, 11)
 
 log_lik_hierarchical_all <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
@@ -721,7 +704,7 @@ indexes <- seq(1, length(y), 11)
 ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
 ```
 
-*PSIS-LOO on the whole dataset*
+*LOO-CV on the whole dataset*
 
 ```{r}
 log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
