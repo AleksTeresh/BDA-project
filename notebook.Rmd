@@ -70,7 +70,8 @@ plots <- lapply(
   }
 )
 
-plots
+grid.arrange(grobs = plots[1:6], ncol = 2)
+grid.arrange(grobs = plots[7:11], ncol = 2)
 ```
 
 Preparing the data
@@ -542,9 +543,9 @@ plots <- lapply(
   }
 )
 
-plots
+grid.arrange(grobs = plots[1:6], ncol = 2)
+grid.arrange(grobs = plots[7:11], ncol = 2)
 ```
-
 
 
 ```{r}
@@ -558,6 +559,10 @@ plots <- lapply(
 )
 
 plots
+```
+
+```{r}
+ppc_error_scatter_avg(c(hierarchical_data[, (2:10)]), y_rep)
 ```
 
 
@@ -629,7 +634,8 @@ plots <- lapply(
   }
 )
 
-plots
+grid.arrange(grobs = plots[1:6], ncol = 2)
+grid.arrange(grobs = plots[7:11], ncol = 2)
 ```
 
 ```{r}
@@ -644,6 +650,18 @@ plots <- lapply(
 
 plots
 ```
+
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+y_rep_wide_prior <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
+plot_baseline = ppc_error_scatter_avg(c(hierarchical_data[, (2:10)]), y_rep)
+plot_wide_prior = ppc_error_scatter_avg(c(hierarchical_data[, (2:10)]), y_rep_wide_prior)
+
+grid.arrange(grobs = list(plot_baseline, plot_wide_prior), ncol = 2)
+```
+
+
 
 // include proper prior, jusify
 
