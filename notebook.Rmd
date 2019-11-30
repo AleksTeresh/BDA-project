@@ -188,7 +188,14 @@ get_lfo_cv_results_hierarchical <- function(
       tau_beta_prior_sd = tau_beta_prior_sd,
       use_lfo_cv = 1
     )
-    fit_i = sampling(stan_model_ar_hierarchical, data = stan_data_i, seed = 12452, refresh=0, iter = 5000, control=list(max_treedepth=15))
+    fit_i = sampling(
+      stan_model_ar_hierarchical,
+      data = stan_data_i,
+      seed = 12452,
+      refresh=0,
+      iter = 5000,
+      control=list(max_treedepth=15)
+    )
     last_K_values <- seq(((i-2) * K + 1), ((i - 1) * K))
     loglik_exact_hierarchical[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
   }
@@ -311,7 +318,14 @@ get_lfo_cv_results_separate <- function(alpha_prior_sd, beta_prior_sd) {
       beta_prior_sd = beta_prior_sd,
       use_lfo_cv = 1
     )
-    fit_i = sampling(stan_model_ar_separate, data = stan_data_i, seed = 12452, refresh=0, iter = 5000, control=list(max_treedepth=15))
+    fit_i = sampling(
+      stan_model_ar_separate,
+      data = stan_data_i,
+      seed = 12452,
+      refresh=0,
+      iter = 5000,
+      control=list(max_treedepth=15)
+    )
     last_K_values <- seq(((i-2) * K + 1), ((i - 1) * K))
     loglik_exact_separate[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
   }
@@ -342,6 +356,7 @@ fit_hierarchical_model <- function(
     stan_model_ar_hierarchical,
     data = stan_data,
     seed = 12452,
+    refresh = 0,
     chains = 7,
     iter = 6000,
     control=list(max_treedepth=15)
@@ -350,7 +365,7 @@ fit_hierarchical_model <- function(
   fit_hierarchical
 }
 
-fit_separate_model <- function() {
+fit_separate_model <- function(alpha_prior_sd, beta_prior_sd) {
   nrows <- nrow(full_grouped_data)
   stan_data = list(
     N = (2018-2010+1) * 11,
@@ -358,8 +373,8 @@ fit_separate_model <- function() {
     x = rep(1:nrow(full_grouped_data), 9),
     y = tail(c(full_grouped_data), -11),
     y0 = head(c(full_grouped_data), 11),
-    alpha_prior_sd = 10000,
-    beta_prior_sd = 2,
+    alpha_prior_sd = alpha_prior_sd,
+    beta_prior_sd = beta_prior_sd,
     use_lfo_cv = 0 
   )
   fit_separate = sampling(
@@ -388,6 +403,18 @@ plot_ppc_ribbons <- function(fit, true_data) {
   grid.arrange(grobs = plots[7:11], ncol = 2) 
 }
 
+plot_ppc_intervals <- function(fit, true_data) {
+  y_rep <- as.matrix(fit, pars = "y_rep")
+  plots <- lapply(
+    seq(1, 11),
+    function(group_idx) {
+      indexes <- seq(group_idx, 99, 11)
+      ppc_intervals(c(true_data[group_idx, (2:10)]), y_rep[, indexes])
+    }
+  )
+  
+  plots 
+}
 ```
 
 
@@ -402,7 +429,7 @@ plot_ppc_ribbons <- function(fit, true_data) {
 
 // structure and organization has to be logical
 
-## Data description
+# Data description
 
 Here is a tabular representation of the data.
 
@@ -454,36 +481,12 @@ full_grouped_data <- sapply(
 full_grouped_data
 ```
 
-## Analysis problem
+# Analysis problem
 
-## Models
+# Models
 // add a clear list of models
 
-### Model 1
-
-#### Prior predictive checking
-
-```{r}
-check_prior_hierarchical(full_grouped_data, 20000, 20, 5000, 20)
-```
-
-From teh results above, we ca nsee that 
-
-
-```{r}
-check_prior_hierarchical(full_grouped_data, 20000, 5, 1000, 2)
-```
-
-```{r}
-check_prior_hierarchical(full_grouped_data, 10000, 2, 200, 2)
-```
-
-The latter prior seems to be the most reasonable one. About 52.5% of the mass lies between 0 and 10000. About 6% of the mass is with values > 100000.
-
-This is vage enough and reasonably constrained at the same time.
-
-
-#### Model diagnostics
+## Model 1
 
 The model certainly has some issues, so let's try instead  the complementary non-centered parameterization (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html and here https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html)
 
@@ -567,6 +570,27 @@ generated quantities {
 }
 ```
 
+### Prior predictive checking
+
+```{r}
+check_prior_hierarchical(full_grouped_data, 20000, 20, 5000, 20)
+```
+
+```{r}
+check_prior_hierarchical(full_grouped_data, 20000, 5, 1000, 2)
+```
+
+```{r}
+check_prior_hierarchical(full_grouped_data, 10000, 2, 200, 2)
+```
+
+The latter prior seems to be the most reasonable one. About 52.5% of the mass lies between 0 and 10000. About 6% of the mass is with values > 100000.
+
+This is vage enough and reasonably constrained at the same time.
+
+
+### Model diagnostics
+
 
 ```{r}
 fit_hierarchical <- fit_hierarchical_model(10000, 2, 200, 2)
@@ -604,45 +628,25 @@ rbind_print(
 ### Graphical posterior predictive checking
 
 ```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_ribbon(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes]) 
-  }
-)
-
-grid.arrange(grobs = plots[1:6], ncol = 2)
-grid.arrange(grobs = plots[7:11], ncol = 2)
-```
-
-
-```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_intervals(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes])
-  }
-)
-
-plots
+plot_ppc_ribbons(fit_hierarchical, full_grouped_data)
 ```
 
 ```{r}
+plot_ppc_intervals(fit_hierarchical, full_grouped_data)
+```
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 ```
 
 
-Thus, we figured out that the problem is caused by age group 7 and 8. 
-
 ### Prior sensitivity analysis
 
 Now let's try another sensible but a little stronger informative prior, while keeping results of the previous fit as our base-line.
+
 ```{r}
-fit_hierarchical_wide_prior = fit_hierarchical_model(10000, 25, 2000, 25)
+fit_hierarchical_wide_prior = fit_hierarchical_model(10000, 25, 2000, 25) # wider prior
 print(fit_hierarchical_wide_prior)
 ```
 
@@ -657,39 +661,11 @@ plot(loo_hierarchical_wide_prior)
 ```
 
 ```{r}
-y_rep <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_ribbon(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes]) 
-  }
-)
-
-grid.arrange(grobs = plots[1:6], ncol = 2)
-grid.arrange(grobs = plots[7:11], ncol = 2)
+plot_ppc_ribbons(fit_hierarchical_wide_prior, full_grouped_data)
 ```
 
 ```{r}
-y_rep <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_intervals(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes])
-  }
-)
-
-plots
-```
-
-```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-y_rep_wide_prior <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
-plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
-
-grid.arrange(grobs = list(plot_baseline, plot_wide_prior), ncol = 2)
+plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
 ```
 
 ```{r}
@@ -718,6 +694,14 @@ print_fit_diagnostic(fit_hierarchical_narrow_prior, 15)
 loo_hierarchical_narrow_prior <- get_loo_diagnostics(fit_hierarchical_narrow_prior)
 print(loo_hierarchical_narrow_prior)
 plot(loo_hierarchical_narrow_prior)
+```
+
+```{r}
+plot_ppc_ribbons(fit_hierarchical_narrow_prior, full_grouped_data)
+```
+
+```{r}
+plot_ppc_intervals(fit_hierarchical_narrow_prior, full_grouped_data)
 ```
 
 ```{r}
@@ -753,7 +737,7 @@ plot(plot_narrow_prior)
 
 // posterior predictive checking
 
-### Model 2
+## Model 2
 
 ```{stan, output.var="stan_model_ar_separate"}
 data {
@@ -818,24 +802,23 @@ generated quantities {
 ```
 
 
-#### Prior predictive checking
+### Prior predictive checking
 
 ```{r}
-check_prior(full_grouped_data, 0, 10000, 0, 2)
+check_prior_separate(full_grouped_data, 0, 10000, 0, 2)
 ```
 
 ```{r}
-check_prior(full_grouped_data, 0, 10000, 1, 1)
+check_prior_separate(full_grouped_data, 0, 10000, 1, 1)
 ```
 
 ```{r}
-check_prior(full_grouped_data, 0, 10000, 0, 25)
+check_prior_separate(full_grouped_data, 0, 10000, 0, 25)
 ```
 
 ```{r}
-check_prior(full_grouped_data, 0, 30000, 0, 2)
+check_prior_separate(full_grouped_data, 0, 30000, 0, 2)
 ```
-
 
 
 ```{r}
@@ -847,21 +830,15 @@ print(fit_separate)
 print_fit_diagnostic(fit_separate, 10)
 ```
 
-```{r}
-check_div(fit_separate)
-```
-
-*PSIS-LOO on the whole dataset*
-
+*PSIS-LOO*
 
 ```{r}
-loo_separate <- get_loo_diagnostics(log_lik_separate)
+loo_separate <- get_loo_diagnostics(fit_separate)
 print(loo_separate)
 plot(loo_separate)
 ```
 
 The code below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html
-
 
 ```{r}
 loglik_exact_separate <- get_lfo_cv_results_separate(10000, 2)
@@ -881,42 +858,13 @@ plot_ppc_ribbons(fit_separate, full_grouped_data)
 
 
 ```{r}
+plot_ppc_intervals(fit_separate, full_grouped_data)
+```
+
+```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_intervals(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes])
-  }
-)
-
-plots
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 ```
-
-Here is a comparison for hierarchical and separate model respectively
-
-```{r}
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
-```
-```{r}
-loo_hierarchical$estimates[1:2]
-```
-
-```{r}
-comparison_results = matrix(
-  c(
-    loo_hierarchical$estimates[1:2],
-    exact_elpd_hierarchical,
-    loo_separate$estimates[1:2],
-    exact_elpd_separate
-  ),
-  ncol = 2,
-  dimnames = list(c("elpd_loo", "p_loo", "elpd_lfo"), c("hierarchical", "separate"))
-)
-comparison_results
-```
-
 
 ### Prior sensitivity analysis
 
@@ -938,40 +886,7 @@ plot(loo_separate_wide_prior)
 
 
 ```{r}
-y_rep <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_ribbon(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes]) 
-  }
-)
-
-grid.arrange(grobs = plots[1:6], ncol = 2)
-grid.arrange(grobs = plots[7:11], ncol = 2)
-```
-
-```{r}
-y_rep <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
-plots <- lapply(
-  seq(1, 11),
-  function(group_idx) {
-    indexes <- seq(group_idx, 99, 11)
-    ppc_intervals(c(full_grouped_data[group_idx, (2:10)]), y_rep[, indexes])
-  }
-)
-
-plots
-```
-
-
-```{r}
-y_rep <- as.matrix(fit_separate, pars = "y_rep")
-y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
-plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
-
-grid.arrange(grobs = list(plot_baseline, plot_wide_prior), ncol = 2)
+plot_ppc_ribbons(fit_separate_wide_prior, full_grouped_data)
 ```
 
 ```{r}
@@ -1003,6 +918,16 @@ plot(loo_separate_narrow_prior)
 ```
 
 ```{r}
+loglik_exact_separate <- get_lfo_cv_results_separate(2000, 0.5)
+exact_elpds_1sap <- apply(loglik_exact_separate, 2, log_mean_exp)
+exact_elpd_separate_narrow_prior <- c(ELPD = sum(exact_elpds_1sap[34:99]))
+
+rbind_print(
+  "LFO" = exact_elpd_separate_narrow_prior
+)
+```
+
+```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
 y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
 y_rep_narrow_prior <- as.matrix(fit_separate_narrow_prior, pars = "y_rep")
@@ -1015,18 +940,28 @@ plot(plot_baseline)
 plot(plot_narrow_prior)
 ```
 
-```{r}
-loglik_exact_separate <- get_lfo_cv_results_separate(2000, 0.5)
-exact_elpds_1sap <- apply(loglik_exact_separate, 2, log_mean_exp)
-exact_elpd_separate_narrow_prior <- c(ELPD = sum(exact_elpds_1sap[34:99]))
+## Model comparison
 
-rbind_print(
-  "LFO" = exact_elpd_separate_narrow_prior
-)
+Here is a comparison for hierarchical and separate model respectively
+
+```{r}
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
 ```
 
-
-## Model comparison
+```{r}
+comparison_results = matrix(
+  c(
+    loo_hierarchical$estimates[1:2], # elpd and p_eff values
+    exact_elpd_hierarchical,
+    loo_separate$estimates[1:2], # elpd and p_eff values
+    exact_elpd_separate
+  ),
+  ncol = 2,
+  dimnames = list(c("elpd_loo", "p_loo", "elpd_lfo"), c("hierarchical", "separate"))
+)
+comparison_results
+```
 
 ```{r}
 kable(comparison_results)
@@ -1042,7 +977,7 @@ kable(comparison_results)
 
 // posterior predictive checking
 
-## Problems encountered and potential improvements
+# Problems encountered and potential improvements
 
 
 # Conclusion
