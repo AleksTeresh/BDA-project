@@ -954,11 +954,27 @@ comparison_results = matrix(
   c(
     loo_hierarchical$estimates[1:2], # elpd and p_eff values
     exact_elpd_hierarchical,
+    loo_hierarchical_wide_prior$estimates[1:2], # elpd and p_eff values
+    exact_elpd_hierarchical_wide_prior,
+    loo_hierarchical_narrow_prior$estimates[1:2], # elpd and p_eff values
+    exact_elpd_hierarchical_narrow_prior,
     loo_separate$estimates[1:2], # elpd and p_eff values
-    exact_elpd_separate
+    exact_elpd_separate,
+    loo_separate_wide_prior$estimates[1:2], # elpd and p_eff values
+    exact_elpd_separate_wide_prior,
+    loo_separate_narrow_prior$estimates[1:2], # elpd and p_eff values
+    exact_elpd_separate_narrow_prior
   ),
-  ncol = 2,
-  dimnames = list(c("elpd_loo", "p_loo", "elpd_lfo"), c("hierarchical", "separate"))
+  ncol = 6,
+  dimnames = list(
+    c("elpd_loo", "p_loo", "elpd_lfo"),
+    c("hierarchical",
+      "hierarchical (wide prior)",
+      "hierarchical (narrow prior)",
+      "separate",
+      "separate (wide prior)",
+      "separate (narrow prior)")
+  )
 )
 comparison_results
 ```
