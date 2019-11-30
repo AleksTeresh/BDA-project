@@ -1,6 +1,6 @@
 ---
 title: "BDA-project"
-output: pdf_document
+output: html_notebook
 ---
 
 # Loaded packages
@@ -65,8 +65,8 @@ plots <- lapply(
   seq(1, 11),
   function(i) {
     data_for_age_group <- filter(data, Victim.s.age == ageGroups[i])
-    ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
-      geom_point(size = 1)  + geom_smooth()  
+     ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
+      geom_point(size = 1)  + geom_line()  
   }
 )
 
@@ -263,7 +263,7 @@ stan_data = list(
   y = tail(c(hierarchical_data), -11),
   y0 = head(c(hierarchical_data), 11)
 )
-fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, iter = 5000, control=list(max_treedepth=15))
+fit_hierarchical = sampling(stan_model_ar_hierarchical,data = stan_data, seed = 12452, refresh = 0, iter = 5000, control=list(max_treedepth=15))
 print(fit_hierarchical)
 ```
 
@@ -377,7 +377,6 @@ generated quantities {
   }
 }
 ```
-
 
 
 ```{r}
@@ -532,6 +531,7 @@ rbind_print(
 
 ### Graphical posterior predictive checking
 
+
 ```{r}
 y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
 plots <- lapply(
@@ -539,6 +539,21 @@ plots <- lapply(
   function(group_idx) {
     indexes <- seq(group_idx, 99, 11)
     ppc_ribbon(c(hierarchical_data[group_idx, (2:10)]), y_rep[, indexes]) 
+  }
+)
+
+plots
+```
+
+
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+plots <- lapply(
+  seq(1, 11),
+  function(group_idx) {
+    indexes <- seq(group_idx, 99, 11)
+    ppc_intervals(c(hierarchical_data[group_idx, (2:10)]), y_rep[, indexes])
   }
 )
 
