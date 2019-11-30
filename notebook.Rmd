@@ -1,6 +1,6 @@
 ---
 title: "BDA-project"
-output: html_notebook
+output: pdf_document
 ---
 
 # Loaded packages
@@ -569,65 +569,48 @@ Now let's try another sensible but a little stronger informative prior, while ke
 ```{r}
 nrows <- nrow(hierarchical_data)
 stan_data = list(
-  N = (2018-2009+1) * 11,
+  N = (2018-2010+1) * 11,
   K = 11,
-  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
-  y = c(hierarchical_data)
+  x = rep(1:nrow(hierarchical_data), 9),
+  y = tail(c(hierarchical_data), -11),
+  y0 = head(c(hierarchical_data), 11),
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 25,
+  tau_alpha_prior_sd = 2000,
+  tau_beta_prior_sd = 25,
+  use_lfo_cv = 0 
 )
-fit_hierarchical = sampling(stan_model_ar_hierarchical, data = stan_data, seed = SEED, iter = 10000, control=list(adapt_delta=0.90))
+fit_hierarchical_wide_prior = sampling(
+  stan_model_ar_hierarchical,
+  data = stan_data,
+  seed = 12452,
+  refresh=0,
+  chains = 7,
+  iter = 6000,
+  control=list(max_treedepth=15)
+)
 print(fit_hierarchical)
 ```
 
 ```{r}
-check_treedepth(fit_hierarchical)
+check_treedepth(fit_hierarchical_wide_prior, 15)
 ```
 
 ```{r}
-rstan::check_energy(fit_hierarchical)
+rstan::check_energy(fit_hierarchical_wide_prior)
 ```
 
 ```{r}
-check_div(fit_hierarchical)
+check_div(fit_hierarchical_wide_prior)
 ```
 
 ```{r}
-c_dark <- c("#8F272780")
-green <- c("#00FF0080")
+N <- 99
+L <- 11 * 3 # fit_hierarchical_wide_prior does not have the first year already, so we only need to remove 3 years from the beginning
+# indexes <- seq(2, 99, 11)
 
-partition <- partition_div(fit_hierarchical)
-div_params <- partition[[1]]
-nondiv_params <- partition[[2]]
-
-par(mar = c(4, 4, 0.5, 0.5))
-plot(nondiv_params$'beta[8]', log(nondiv_params$tau_alpha),
-     col=c_dark, pch=16, cex=0.8, xlab="beta[8]", ylab="log(tau_beta)",
-     )
-points(div_params$'beta[8]', log(div_params$tau_alpha),
-       col=green, pch=16, cex=0.8)
-```
-
-```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-
-# number of rows = number of post-warmup posterior draws
-# number of columns = length(y)
-dim(y_rep) 
-```
-
-```{r}
-y <- tail(c(hierarchical_data), -11)
-```
-
-
-```{r}
-indexes <- seq(1, length(y), 11)
-ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
-```
-
-*LOO-CV on the whole dataset*
-
-```{r}
-log_lik_hierarchical <- extract_log_lik(fit_hierarchical, merge_chains = FALSE)
+log_lik_hierarchical_all <- extract_log_lik(fit_hierarchical_wide_prior, merge_chains = FALSE)
+log_lik_hierarchical <- log_lik_hierarchical_all[, , (L+1):N]
 
 r_eff_hierarchical <- relative_eff(exp(log_lik_hierarchical)) 
 loo_hierarchical<- loo(log_lik_hierarchical, r_eff = r_eff_hierarchical)
@@ -635,6 +618,32 @@ print(loo_hierarchical)
 plot(loo_hierarchical)
 ```
 
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
+plots <- lapply(
+  seq(1, 11),
+  function(group_idx) {
+    indexes <- seq(group_idx, 99, 11)
+    ppc_ribbon(c(hierarchical_data[group_idx, (2:10)]), y_rep[, indexes]) 
+  }
+)
+
+plots
+```
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
+plots <- lapply(
+  seq(1, 11),
+  function(group_idx) {
+    indexes <- seq(group_idx, 99, 11)
+    ppc_intervals(c(hierarchical_data[group_idx, (2:10)]), y_rep[, indexes])
+  }
+)
+
+plots
+```
 
 // include proper prior, jusify
 
