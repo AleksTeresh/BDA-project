@@ -662,6 +662,8 @@ grid.arrange(grobs = list(plot_baseline, plot_wide_prior), ncol = 2)
 ```
 
 
+Now let's try a little strnoger prior
+
 
 // include proper prior, jusify
 
@@ -680,109 +682,138 @@ data {
   int<lower=0> N;
   int<lower=0> K; // number of groups
   int<lower=1,upper=K> x[N]; // group indicator
-  vector[N] y;
+  int<lower=0> y[N];
+  int<lower=0> y0[K];
+  real<lower=0> alpha_prior_sd;
+  real<lower=0> beta_prior_sd;
+  int<lower=0, upper=1> use_lfo_cv;
 }
 parameters {
   vector[K] alpha;
   vector[K] beta;
-  real<lower=0> sigma;
 }
 transformed parameters {
-  vector [N-K] mu;
-
-  for (n in K+1:N) {
-    mu[n-K] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
+  
+  for (n in 1:K) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
+  }
+  
+  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
   }
 }
 model {
-  sigma ~ cauchy(0, 5000); // weakly informative prior
-  alpha ~ normal(0, 10000);
-  beta ~ normal(0, 100);
+  alpha ~ normal(0, alpha_prior_sd); // weakly informative prior
+  beta ~ normal(0, beta_prior_sd);  // weakly informative prior
   
-  for (n in K+1:N) {
-     y[n] ~ normal(mu[n-K], sigma);
+  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
+     y[n] ~ poisson(mu[n]);
   }
 }
 generated quantities {
-  vector[N-K] log_lik;
-  vector[N-K] y_rep;
-  for (i in K+1:N) {
-    y_rep[i-K] = normal_rng(mu[i-K], sigma);
-    log_lik[i-K] = normal_lpdf(y[i] | mu[i-K], sigma);
+  vector[N] log_lik;
+  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
+  vector[use_lfo_cv ? 0 : N] y_rep;
+  
+  if (use_lfo_cv) {
+    for (n in 1:K) {
+      mu_pred[n] = alpha[n] + beta[n] * y[(N - (1 * K)) - K + n];
+    }
+    
+    for (i in 1:(N - (1 * K))) {
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+    
+    for (i in 1:K) {
+      log_lik[(N - (1 * K)) + i] = poisson_lpmf(y[(N - (1 * K)) + i] | mu_pred[i]);
+    }
+  } else {
+    for (i in 1:N) {
+      y_rep[i] = poisson_rng(mu[i]);
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
   }
 }
 ```
 
+
+#### Prior predictive checking
+  
 ```{r}
-nrows <- nrow(hierarchical_data)
-stan_data = list(
-  N = (2018-2009+1) * 11,
-  K = 11,
-  x = rep(1:nrow(hierarchical_data), ncol(hierarchical_data)),
-  y = c(hierarchical_data)
-)
-fit_separate = sampling(stan_model_ar_separate, data = stan_data, seed = SEED, iter = 10000)
-print(fit_separate)
+check_prior <- function(
+  separate_data, 
+  alpha_prior_sd,
+  beta_prior_sd
+) {
+  N = 10 # number of (succesfull) samples to draw
+  K = 11 # number of hierarchical groups
+  D = 10 # number of datapoints (i.e. number of years)
+  
+  counter_1e7 = 0
+  counter_1e6 = 0
+  counter_1e5 = 0
+  counter_1e4 = 0
+  
+  y_pred_prior = array(rep(1, N*K*D), dim=c(N, K, D-1)) # initiaalize an empty array to hold data
+  
+  for (j in 1:K) { # number of age groups
+    for (q in 1:N) {
+      alpha = rnorm(1, 0, alpha_prior_sd) # based on previous studies
+      beta = rnorm(1, 0, beta_prior_sd) # based on previous studies
+      while (TRUE) {
+        passed = TRUE
+        for (i in 2:D) { # starting with 2nd day becase AR(1) model is used
+          mu = alpha + beta * hierarchical_data[j, i-1]
+          if (mu < 0) {
+            passed = FALSE
+            break
+          }
+        }
+        
+        if (passed) {
+          break
+        }
+      }
+      
+      for (i in 2:D) { # starting with 2nd day becase AR(1) model is used
+        mu = alpha + beta * hierarchical_data[j, i-1]
+        
+        if (mu > 0) {
+          y_pred = rpois(1, mu)
+          
+          if (y_pred > 1e7) {
+            counter_1e7 = counter_1e7 + 1
+          }
+          if (y_pred > 1e6) {
+            counter_1e6 = counter_1e6 + 1
+          }
+          if (y_pred > 1e5) {
+            counter_1e5 = counter_1e5 + 1
+          }
+          if (y_pred > 1e4) {
+            counter_1e4 = counter_1e4 + 1
+          }
+  
+          y_pred_prior[q, j, i-1] <- y_pred
+        }
+      }
+    }
+  }
+  
+  print(counter_1e7 / (N * K * (D - 1)))
+  print(counter_1e6 / (N * K * (D - 1)))
+  print(counter_1e5 / (N * K * (D - 1)))
+  print(counter_1e4 / (N * K * (D - 1))) 
+  
+  partial_percentage_hist(y_pred_prior, 1e6)
+  partial_percentage_hist(y_pred_prior, 1e5)
+  partial_percentage_hist(y_pred_prior, 1e4)
+}
 ```
 
 ```{r}
-check_treedepth(fit_separate)
-```
-
-```{r}
-rstan::check_energy(fit_separate)
-```
-
-```{r}
-check_div(fit_separate)
-```
-
-```{r}
-c_dark <- c("#8F272780")
-green <- c("#00FF0080")
-
-partition <- partition_div(fit_separate)
-div_params <- partition[[1]]
-nondiv_params <- partition[[2]]
-
-par(mar = c(4, 4, 0.5, 0.5))
-plot(nondiv_params$'beta[3]', log(nondiv_params$tau_alpha),
-     col=c_dark, pch=16, cex=0.8, xlab="beta[3]", ylab="log(tau_beta)",
-     )
-points(div_params$'beta[3]', log(div_params$tau_alpha),
-       col=green, pch=16, cex=0.8)
-```
-
-```{r}
-y_rep <- as.matrix(fit_separate, pars = "y_rep")
-
-# number of rows = number of post-warmup posterior draws
-# number of columns = length(y)
-dim(y_rep) 
-```
-
-```{r}
-y <- tail(c(hierarchical_data), -11)
-```
-
-```{r}
-plot(y[indexes])
-```
-
-
-```{r}
-indexes <- seq(1, length(y), 11)
-ppc_dens_overlay(y[indexes], y_rep[1:4, indexes])
-```
-
-
-```{r}
-log_lik_separate <- extract_log_lik(fit_separate, merge_chains = FALSE)
-
-r_eff_separate <- relative_eff(exp(log_lik_separate)) 
-loo_separate <- loo(log_lik_separate, r_eff = r_eff_separate)
-print(loo_separate)
-plot(loo_separate)
+check_prior(hierarchical_data, 20000, 20)
 ```
 
 
