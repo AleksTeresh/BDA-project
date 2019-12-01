@@ -670,7 +670,11 @@ We thus can conclude that there are no apparent issues with divergences which me
 
 #### PSIS-LOO and LFO
 
-In order to evaluate the model's predictive performance, which is one of the things that matters most according to the analysis problem section.
+In order to evaluate the model's predictive performance, which is one of the things that matters the most according to the analysis problem section, we're running PSIS-LOO analysis of the model in the code snippet below.
+
+Notice that we've decided to leave first 3 fitted values out of the analysis. Because the model is not fit for the first data point at all (see model description section for details), we thus doing PSIS-LOO only for 5 - 10 datapoints of each age group.
+
+If loo() function is run on the entire dataset without oimtting first several value, $\hat k$ values for those first datapoints tend to be very bad (most of them > 1.0). Besides, the similar technique was used in http://mc-stan.org/loo/articles/loo2-lfo.html. One justification for this could be that we need to have some histoical observations first (at least 4 in our case) to make a decent prediction for the next value.
 
 ```{r}
 loo_hierarchical <- get_loo_diagnostics(fit_hierarchical)
@@ -678,12 +682,16 @@ print(loo_hierarchical)
 plot(loo_hierarchical)
 ```
 
+We can see from the print out above that $\hat k$ values for some of the datapoints are above 0.7. Becasause of this and because PSIS-LOO uses data from the future datapoints, we cannot fully rely on ELPD shown above (the result might be overoptimistic). For these reasons, we'll do a true (as opposed to PSIS approximation) leave-future-out corss validation. The code used in the function below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html.
+
 ```{r}
 exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(10000, 2, 2000, 2)
 rbind_print(
   "LFO" = exact_elpd_hierarchical
 )
 ```
+
+Thus, this value can be used later when comparing the models in terms of their predictive performance.
 
 ### Graphical posterior predictive checking
 
@@ -720,7 +728,7 @@ We can see that for most of the datapoinst, the average error is below 150. More
 
 ### Prior sensitivity analysis
 
-Now let's try another sensible but wider prior, while keeping results of the previous fit as our base-line.
+Now let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
 
 ```{r}
 fit_hierarchical_wide_prior = fit_hierarchical_model(100000, 25, 10000, 25) # wider prior
@@ -741,6 +749,8 @@ print(loo_hierarchical_wide_prior)
 plot(loo_hierarchical_wide_prior)
 ```
 
+PSIS-LOO analysis looks similar to the baseline case, where $\hat k$ values for some datapoinst exceeded 0.7. Also estimated ELPD_LOO value is very close to the baseline one.
+
 ```{r}
 plot_ppc_ribbons(fit_hierarchical_wide_prior, full_grouped_data)
 ```
@@ -749,30 +759,40 @@ plot_ppc_ribbons(fit_hierarchical_wide_prior, full_grouped_data)
 plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
 ```
 
+Both ribbons and intervals visualizations look similar to the baseline case.
+
 ```{r}
-exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(100000, 25, 10000, 25)
+# exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(100000, 25, 10000, 25)
 rbind_print(
   "LFO" = exact_elpd_hierarchical_wide_prior
 )
 ```
 
+ELPD_LFO value is almost exaclty the same as in out baseline case (which was -581.87). So we can conclude that there is almost no difference between the models in terms of their predictive performance.
 
-Now let's try a stronger more narrow prior
+
+*Now let's try a stronger more narrow prior*
 
 ```{r}
 fit_hierarchical_narrow_prior = fit_hierarchical_model(2000, 0.5, 10, 0.1)
 print(fit_hierarchical_narrow_prior)
 ```
 
+Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
+
 ```{r}
 print_fit_diagnostic(fit_hierarchical_narrow_prior, 15)
 ```
+
+No tree depth saturations and 0 divergences, which is even better compared to the previous cases where we did have negligeble number of divergences.
 
 ```{r}
 loo_hierarchical_narrow_prior <- get_loo_diagnostics(fit_hierarchical_narrow_prior)
 print(loo_hierarchical_narrow_prior)
 plot(loo_hierarchical_narrow_prior)
 ```
+
+PSIS-LOO diagnostics plot looks similar to the previous cases, with estimated ELPD value just slightly worse in the case of the narrow prior.
 
 ```{r}
 plot_ppc_ribbons(fit_hierarchical_narrow_prior, full_grouped_data)
@@ -782,12 +802,18 @@ plot_ppc_ribbons(fit_hierarchical_narrow_prior, full_grouped_data)
 plot_ppc_intervals(fit_hierarchical_narrow_prior, full_grouped_data)
 ```
 
+Similarly to the case of the wider prior, no noticable difference can be observed from the plots above compared to the other priors.
+
 ```{r}
 exact_elpd_hierarchical_narrow_prior <- get_lfo_cv_results_hierarchical(2000, 0.5, 10, 0.1)
 rbind_print(
   "LFO" = exact_elpd_hierarchical_narrow_prior
 )
 ```
+
+ELPD value calculated based on LFO analysis is very close to the other 2 demonstrated before.
+
+The scatter plot below depicts average errors for different datapoints. X axis represents y - y_rep value, while Y axix represents a true value of the datapoint (hence y).
 
 ```{r}
 y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
@@ -802,7 +828,7 @@ plot(plot_baseline)
 plot(plot_narrow_prior)
 ```
 
-// include proper prior, jusify
+Thus, based on the plots above and comparing ELDP values obtained using LFO-CV for each of the 3 different priors we can conclude that the model is not sensitive to a reasonable changes in it's prior and is therefore can be considered as robust and highly dependent on data.
 
 ## Model 2
 
@@ -895,9 +921,13 @@ fit_separate = fit_separate_model(10000, 2)
 print(fit_separate)
 ```
 
+All of the $\hat R$ values look good and ESS values are all well above 10000, which is more than enough given tha we only have 7 chains (7 * 10 = 70).
+
 ```{r}
 print_fit_diagnostic(fit_separate, 10)
 ```
+
+HCM -specific convergence diagnostics looks very good too.
 
 *PSIS-LOO*
 
@@ -906,6 +936,8 @@ loo_separate <- get_loo_diagnostics(fit_separate)
 print(loo_separate)
 plot(loo_separate)
 ```
+
+
 
 *LFO-LOO*
 
@@ -935,13 +967,17 @@ ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 
 Now let's try another sensible but a little wider prior, while keeping results of the previous fit as our base-line.
 ```{r}
-fit_separate_wide_prior = fit_separate_model(10000, 25)
+# fit_separate_wide_prior = fit_separate_model(10000, 25)
 print(fit_separate_wide_prior)
 ```
+
+Again, ESS and $\hat R$ both look good
 
 ```{r}
 print_fit_diagnostic(fit_separate_wide_prior, 10)
 ```
+
+No tree depth saturations and only 2 divergences per 21000 iterations.
 
 ```{r}
 loo_separate_wide_prior <- get_loo_diagnostics(fit_separate_wide_prior)
@@ -968,9 +1004,13 @@ fit_separate_narrow_prior = fit_separate_model(2000, 0.5)
 print(fit_separate_narrow_prior)
 ```
 
+Similarly ESS and $\hat R$ are very good.
+
 ```{r}
 print_fit_diagnostic(fit_separate_narrow_prior, 10)
 ```
+
+Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifica convergence diagnostics looks good too.
 
 ```{r}
 loo_separate_narrow_prior <- get_loo_diagnostics(fit_separate_narrow_prior)
@@ -984,6 +1024,8 @@ rbind_print(
   "LFO" = exact_elpd_separate_narrow_prior
 )
 ```
+
+Rather surprisingly the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously.
 
 ```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
@@ -1006,6 +1048,8 @@ Here is a comparison for hierarchical and separate model respectively
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
 ```
+
+As can be seen the difference between the 2 models is rather small one.
 
 ```{r}
 comparison_results = matrix(
@@ -1041,15 +1085,9 @@ comparison_results
 kable(comparison_results)
 ```
 
-// include proper prior, jusify
+Thus, we can see that while both of the models (hierarchical and separate are far from being perfect when trying to fit the data), hierarchical is a bit better (according ELPD value obtained as a result of LFO-CV) than the separate model. This is true for the "original" and "wider" priors. However, intereestingly, one can see that the separate model just slightly outperforms the hierarchical one if a stringer prior is used for it.
 
-// Rhat convergence diagnostics
 
-// HMC specific convergence diagnostics (divergences, tree depth)
-
-// ESS diagnostics
-
-// posterior predictive checking
 
 # Problems encountered and potential improvements
 
