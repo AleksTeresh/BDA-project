@@ -234,7 +234,6 @@ get_lfo_cv_results_hierarchical <- function(
     loglik_exact_hierarchical[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
   }
   
-  loglik_exact_hierarchical <- get_lfo_cv_results_hierarchical(2000, 0.5, 10, 0.1)
   exact_elpds_1sap <- apply(loglik_exact_hierarchical, 2, log_mean_exp)
   
   c(ELPD = sum(exact_elpds_1sap[34:99]))
@@ -612,14 +611,14 @@ Around 70% of the mass are greater than 10,000 so the prior choice is still bad.
 check_prior_hierarchical(full_grouped_data, 10000, 2, 2000, 2)
 ```
 
-The latter prior seems to be the most reasonable one. About 52.5% of the mass lies between 0 and 10000. About 6% of the mass is with values > 100000.
+The latter prior seems to be the most reasonable one. About 50% of the mass lies between 0 and 10000. About 5% of the mass is with values > 100000.
 
 This is vage enough and reasonably constrained at the same time.
 
 ### Model diagnostics
 
 ```{r}
-fit_hierarchical <- fit_hierarchical_model(10000, 2, 200, 2)
+fit_hierarchical <- fit_hierarchical_model(10000, 2, 2000, 2)
 print(fit_hierarchical)
 ```
 
@@ -627,9 +626,9 @@ print(fit_hierarchical)
 
 According to BDA3 Chapter 11.5, it is generally sufficient to have 10 times number of chains effective sample sizes to obtain a reasonable precision from the simulation. Since we're using 7 chains (as can be seen from the output above), we need to make sure that there are at least 7 * 10 = 70 effective sample sizes for each of the parameters.
 
-As can be seen, all parameters have $\hat n_{eff}$ greater than *3700*, which is clearly sufficient given the recommended value of 70.
+As can be seen, all parameters have $\hat n_{eff}$ greater than *3650*, which is clearly sufficient given the recommended value of 70.
 
-Besides, according to https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "When $n_{eff} / n_{transitions} < 0.001$ the estimators that we use are often biased and can significantly overestimate the true effective sample size.". For our case, the lowest ratio is 3700 / 21000 = 0.176 when taking all post-warmup draws as $n_{transitions}$.
+Besides, according to https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "When $n_{eff} / n_{transitions} < 0.001$ the estimators that we use are often biased and can significantly overestimate the true effective sample size.". For our case, the lowest ratio is 3650 / 21000 = 0.174 when taking all post-warmup draws as $n_{transitions}$.
 
 Thus, we can consider our simulation precise enough based on the $\hat n_{eff}$ values.
 
@@ -661,15 +660,17 @@ print_fit_diagnostic(fit_hierarchical, 15)
 
 Quoting from https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "The dynamic implementation of Hamiltonian Monte Carlo used in Stan has a maximum trajectory length built in to avoid infinite loops that can occur for non-identified models. For sufficiently complex models, however, Stan can saturate this threshold even if the model is identified, which limits the efficacy of the sampler."
 
-As can be seen from the output above, 29 iterations saturated the tree depth of 10. However, as can be noticed the fitting was run with maximum tree depth of 15. With tree-depth set to 15, there are 0 saturations.
+As can be seen from the output above, some iterations saturated the tree depth of 10. However, as can be noticed the fitting was run with maximum tree depth of 15. With tree-depth set to 15, there are 0 saturations.
 
 Thus, we can conclude that having max. tree depth set to 15, allows NUTS to not be terminated prematurely and thus the efficientcy of our sampling algorithm is not being restricted.
 
-Besides, we can see that 0 iterations ended with a divergence in the fitting above. Divergences in a simulation might be a indicator of pathological neighbourhoodsof the posterior that the simulated Hamiltonian trajectories are not able to explore sufficiently well (see https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html). 
+Besides, we can see that only 2 iterations ended with divergence in the fitting above, which can be safely neglected. Divergences in a simulation might be a indicator of pathological neighbourhoodsof the posterior that the simulated Hamiltonian trajectories are not able to explore sufficiently well (see https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html). 
 
 We thus can conclude that there are no apparent issues with divergences which means that the simulation was able to explore all the important parts of the posterior sufficiently well.
 
 #### PSIS-LOO and LFO
+
+In order to evaluate the model's predictive performance, which is one of the things that matters most according to the analysis problem section.
 
 ```{r}
 loo_hierarchical <- get_loo_diagnostics(fit_hierarchical)
@@ -678,7 +679,7 @@ plot(loo_hierarchical)
 ```
 
 ```{r}
-exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(10000, 2, 200, 2)
+exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(10000, 2, 2000, 2)
 rbind_print(
   "LFO" = exact_elpd_hierarchical
 )
@@ -710,7 +711,7 @@ y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 ```
 
-We can see that for most of the datapoinst, the average error is below 150. Moreover, approximately the same number of data points have negative error as the number of datapoints that have positive average error. it also can be noted that there is moer variation in values of average error for datapoints whose true value is above 1000 with extreme cases being -350 and just under 500.
+We can see that for most of the datapoinst, the average error is below 150. Moreover, approximately the same number of data points have negative error as the number of datapoints that have positive average error. It also can be noted that there is moer variation in values of average error for datapoints whose true value is above 1000 with extreme cases being -350 and just under 500.
 
 *From everything discussed above in the seciton, we can conclude that* the model is quite poor in terms of how it fits the data. From the simple visualizaions shown above, we can assume that the main reasons for this is:
 
@@ -719,16 +720,20 @@ We can see that for most of the datapoinst, the average error is below 150. More
 
 ### Prior sensitivity analysis
 
-Now let's try another sensible but a little wider prior, while keeping results of the previous fit as our base-line.
+Now let's try another sensible but wider prior, while keeping results of the previous fit as our base-line.
 
 ```{r}
-fit_hierarchical_wide_prior = fit_hierarchical_model(10000, 25, 2000, 25) # wider prior
+fit_hierarchical_wide_prior = fit_hierarchical_model(100000, 25, 10000, 25) # wider prior
 print(fit_hierarchical_wide_prior)
 ```
+
+Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
 
 ```{r}
 print_fit_diagnostic(fit_hierarchical_wide_prior, 15)
 ```
+
+No iterations saturated the maximum tree depth of 15 and there were only 5 divergences out of 21000, which is good enough for us to proceed with the model.
 
 ```{r}
 loo_hierarchical_wide_prior <- get_loo_diagnostics(fit_hierarchical_wide_prior)
@@ -745,7 +750,7 @@ plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
 ```
 
 ```{r}
-exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(10000, 25, 2000, 25)
+exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(100000, 25, 10000, 25)
 rbind_print(
   "LFO" = exact_elpd_hierarchical_wide_prior
 )
@@ -798,14 +803,6 @@ plot(plot_narrow_prior)
 ```
 
 // include proper prior, jusify
-
-// Rhat convergence diagnostics
-
-// HMC specific convergence diagnostics (divergences, tree depth)
-
-// ESS diagnostics
-
-// posterior predictive checking
 
 ## Model 2
 
