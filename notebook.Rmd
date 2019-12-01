@@ -38,6 +38,7 @@ suppressPackageStartupMessages({
 ```{r}
 SEED <- 1472652
 set.seed(SEED)
+options(max.print=1000000)
 ```
 
 # Utility functions
@@ -614,12 +615,53 @@ fit_hierarchical <- fit_hierarchical_model(10000, 2, 200, 2)
 print(fit_hierarchical)
 ```
 
+#### Effective sample size
+
+According to BDA3 Chapter 11.5, it is generally sufficient to have 10 times number of chains effective sample sizes to obtain a reasonable precision from the simulation. Since we're using 7 chains (as can be seen from the output above), we need to make sure that there are at least 7 * 10 = 70 effective sample sizes for each of the parameters.
+
+As can be seen, all parameters have $\hat n_{eff}$ greater than *3700*, which is clearly sufficient given the recommended value of 70.
+
+Besides, according to https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "When $n_{eff} / n_{transitions} < 0.001$ the estimators that we use are often biased and can significantly overestimate the true effective sample size.". For our case, the lowest ratio is 3700 / 21000 = 0.176 when taking all post-warmup draws as $n_{transitions}$.
+
+Thus, we can consider our simulation precise enough based on the $\hat n_{eff}$ values.
+
+#### R hat diagnostics
+
+The below interpretation is partially based on the information given in BDA3 chapter 11 and on RStan
+documentation (see https://rdrr.io/cran/rstan/man/Rhat.html)
+
+$\hat R$ represents the potential scale reduction factor. $\hat R$ of the values provide convergence diagnostic for - in
+this case - 10 chains. It compares “within- and between- chain estimates for model parameters and other
+univariate quantities of interest”. If $\hat R$ is not near 1, we need either to coninue our simulations further or to
+change the algorithm to be more efficient. How close we want $\hat R$ to be to 1 depends on a problem at hand,
+but values smaller than 1.1 or even 1.01 to be safe are generally considered as acceptable
+
+As can be seen from the output above, $\hat R$ for all of the parameters is either 1 or very close to 1. In particular, the values are smaller than a recommended threshold of 1.1 (BDA3 Chapter 11.5).
+
+*We can conclude from this and the previously done ESS diagnostic* that the sequences converged well and we don't need to run the simulations further.
+
+#### HMC -specific convergence diagnostics
+
+The utility function below prints the number of iterations that sanurated the maximum tree depth (set to 15 in this case), and the number of iterations that ended with a divergence.
+
+The utility function uses the code from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R
+
 ```{r}
+print_fit_diagnostic(fit_hierarchical, 10)
 print_fit_diagnostic(fit_hierarchical, 15)
 ```
 
+Quoting from https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "The dynamic implementation of Hamiltonian Monte Carlo used in Stan has a maximum trajectory length built in to avoid infinite loops that can occur for non-identified models. For sufficiently complex models, however, Stan can saturate this threshold even if the model is identified, which limits the efficacy of the sampler."
 
-*PSIS-LOO*
+As can be seen from the output above, 29 iterations saturated the tree depth of 10. However, as can be noticed the fitting was run with maximum tree depth of 15. With tree-depth set to 15, there are 0 saturations.
+
+Thus, we can conclude that having max. tree depth set to 15, allows NUTS to not be terminated prematurely and thus the efficientcy of our sampling algorithm is not being restricted.
+
+Besides, we can see that 0 iterations ended with a divergence in the fitting above. Divergences in a simulation might be a indicator of pathological neighbourhoodsof the posterior that the simulated Hamiltonian trajectories are not able to explore sufficiently well (see https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html). 
+
+We thus can conclude that there are no apparent issues with divergences which means that the simulation was able to explore all the important parts of the posterior sufficiently well.
+
+#### PSIS-LOO and LFO
 
 ```{r}
 loo_hierarchical <- get_loo_diagnostics(fit_hierarchical)
@@ -636,19 +678,36 @@ rbind_print(
 
 ### Graphical posterior predictive checking
 
+Below are the plots of of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" plots.
+
 ```{r}
 plot_ppc_ribbons(fit_hierarchical, full_grouped_data)
 ```
 
+We can see from the plots that the draws from the model do not overlap with the actual data in many cases. Moreover, it seems that the model is way too confident with most of the groups resulting in way too narrow "ribbons" in plots above that do not match with the data.
+
+It can also be observed that in many cases predictions for point $y$ are closer to the true value of $y-1$ than to the true value of $y$. This can be explained by the constraints of the selected model (AR(1)) where a predicted value of $y$ highly depends on the true value of the (chronologically) previous datapoint.
+
+To demonstrate further that the model appears to be too confident, we plot the same data (only some age groups, the reset were omitted for brevity) using "ppc_intervals" function (see below).
+
 ```{r}
 plot_ppc_intervals(fit_hierarchical, full_grouped_data)
 ```
+
+
+Finally, in order to demonstrate further how wrong is the model, the error scatter plot is plotted below demonstrating average errors (of y_pred when compared to the actual data) for each datapoint in each age group.
 
 ```{r}
 y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 ```
 
+We can see that for most of the datapoinst, the average error is below 150. Moreover, approximately the same number of data points have negative error as the number of datapoints that have positive average error. it also can be noted that there is moer variation in values of average error for datapoints whose true value is above 1000 with extreme cases being -350 and just under 500.
+
+*From everything discussed above in the seciton, we can conclude that* the model is quite poor in terms of how it fits the data. From the simple visualizaions shown above, we can assume that the main reasons for this is:
+
+1. Uncertainty intervals are not wide enough
+2. The fact that data depends mainly on hte previous observation only (because of AR(1)), since data changes quite a bit on some occasions for the year $y$ compared to the year $y-1$.
 
 ### Prior sensitivity analysis
 
@@ -855,7 +914,6 @@ rbind_print(
 ```{r}
 plot_ppc_ribbons(fit_separate, full_grouped_data)
 ```
-
 
 ```{r}
 plot_ppc_intervals(fit_separate, full_grouped_data)
