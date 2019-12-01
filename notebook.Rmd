@@ -36,7 +36,7 @@ suppressPackageStartupMessages({
 ```
 
 ```{r}
-SEED <- 1474652
+SEED <- 1472652
 set.seed(SEED)
 ```
 
@@ -139,9 +139,9 @@ check_prior_hierarchical <- function(
   print(counter_1e5 / (N * K * (D - 1)))
   print(counter_1e4 / (N * K * (D - 1))) 
   
-  partial_percentage_hist(y_pred_prior, 1e6)
-  partial_percentage_hist(y_pred_prior, 1e5)
-  partial_percentage_hist(y_pred_prior, 1e4)
+  plot1 <- partial_percentage_hist(y_pred_prior, 1e6)
+  plot2 <- partial_percentage_hist(y_pred_prior, 1e5)
+  plot3 <- partial_percentage_hist(y_pred_prior, 1e4)
 }
 
 print_fit_diagnostic <- function(fit, tree_depth) {
