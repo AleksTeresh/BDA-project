@@ -1125,9 +1125,25 @@ Moreover, we observed little difference between separate and hierarchical model 
 
 # Problems encountered and potential improvements
 
+This section discusses some of the identified problems and promoses some of the improvements that could serve as the next steps in analysing the dataset at hand.
+
 1. The confidence interval seems to be too narrow. This seems to be primarily caused by inability to specify thinkness of the tails in Poisson distribution that was used in both models. One idea for future improvement would be then to try a negative binomial distribution instead. Negative binomial distribution is similar to Poisson but can have much thinker tails if appropriate parameters are used (see https://en.wikipedia.org/wiki/Negative_binomial_distribution).
 
 2. As noted previously, it can be seen from graphical posterior predictive checking that a model looks similar to the original data but lagged by one year. This can be a consequence of the fact that we were using AR(1) model. As one idea for a potential improvement, autoregressive models with higher orders e.g. 2, 3 or 4 could be tried. In addition, other common time-series models such as Moving Average MA or Autoregressive Moving Average ARMA could be tried.
+
+3. Wrong factor for separation into groups, instead should be partitioned based on something esle.
+
+4. Try pooled model
+
+5. Too little data, get access to earlier numbers
+
+6. Use estimated for domestic violence instead of reported figures
+
+7. More posterior predictive checking fom different angles.
+
+8. Slowness of LFO-CV, test and perhaps use an approximation use at http://mc-stan.org/loo/articles/loo2-lfo.html
+
+9. Try other more radical priors
 
 # Conclusion
 
