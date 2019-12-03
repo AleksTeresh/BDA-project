@@ -1125,7 +1125,9 @@ Moreover, we observed little difference between separate and hierarchical model 
 
 # Problems encountered and potential improvements
 
-// one idea is to try negative binomial distribution since it's similar to poisson but has thicker tails (one of the problems identified in the notebook)
+1. The confidence interval seems to be too narrow. This seems to be primarily caused by inability to specify thinkness of the tails in Poisson distribution that was used in both models. One idea for future improvement would be then to try a negative binomial distribution instead. Negative binomial distribution is similar to Poisson but can have much thinker tails if appropriate parameters are used (see https://en.wikipedia.org/wiki/Negative_binomial_distribution).
+
+2. As noted previously, it can be seen from graphical posterior predictive checking that a model looks similar to the original data but lagged by one year. This can be a consequence of the fact that we were using AR(1) model. As one idea for a potential improvement, autoregressive models with higher orders e.g. 2, 3 or 4 could be tried. In addition, other common time-series models such as Moving Average MA or Autoregressive Moving Average ARMA could be tried.
 
 # Conclusion
 
