@@ -43,10 +43,9 @@ options(max.print=1000000)
 
 # Utility functions
 
-```{r}
-# The code in stan_utility.R was copied from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R
-source('stan_utility.R')
+The following functions are used throughout the whole notebook. Since most of the logic needs to be used multiple times, we decided to extract the "messy" parts in their own functions so that notebook as a whole is more readable and a reader can concentrate on *what* is going on, not *how* it is done.
 
+```{r}
 # plot a histogram with percentages instead of frequencies 
 partial_percentage_hist <- function(
   data,
@@ -439,11 +438,13 @@ plot_ppc_intervals <- function(fit, true_data) {
 
 # Introduction
 
-Finland is often praised for their achievements on safe enviorment to live in yet a [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that there're 130,000 people were victims of violence. In this project, we study the number of domestic violence cases happen among several age groups and build statistical model for predicting trend in domestic violence.
+Finland is often praised for its achievements on overall safety and very low crime rate, yet a [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that 130,000 people were victims of domestic violence. Moreover, according to this [source](https://yle.fi/uutiset/osasto/news/finland_is_eus_second_most_violent_country_for_women/7120601), Finland was EU’s second most violent country for women in 2014. Taken by surprise by this information, we decided to look more into the issue. Eventually, it seemed like a great idea to us to use the dataset described below as a basis for the project to understand the issue ourselves and to raise awareness among other students. In this notebook, we study the number of domestic violence cases per year grouped by victims' age categories.
 
 # Data description
 
-The dataset come from Tilastokeskus (Statistic Finland) [https://yle.fi/uutiset/osasto/news/increase_in_reported_domestic_violence_cases_in_finland/10818387] and contains data about number of victims by age from 2009 to 2018. There are totally 11 age groups, which are [0-4], [5-9], [10-14], [15-17], [18-20], [21-24], [25-34], [35-44], [45-54], [55-64] and [65-].
+The dataset was obtained from Tilastokeskus [Statistic Finland](https://yle.fi/uutiset/osasto/news/increase_in_reported_domestic_violence_cases_in_finland/10818387) and contains data about the number of victims by age groups from 2009 to 2018. There are 11 age groups in total, which are [0-4], [5-9], [10-14], [15-17], [18-20], [21-24], [25-34], [35-44], [45-54], [55-64] and [65-].
+
+More information about the dataset could by found following [this link](https://www.stat.fi/til/rpk/2018/15/rpk_2018_15_2019-06-06_tie_001_en.html)
 
 ```{r}
 data = read.csv("dataset.csv", header = TRUE, sep=";")
@@ -469,7 +470,7 @@ grid.arrange(grobs = plots[1:6], ncol = 2)
 grid.arrange(grobs = plots[7:11], ncol = 2)
 ```
 
-We reformat the data into matrix form so that it's easier to work with. Each row of the matrix represents number of victims by age, from [-4] to [65-], in a year, starting from 2009 to 2018.
+We reformat the data into matrix form so that it's easier to work with. Rows represent age groups in ascending order and columns represent years: 2009 to 2018.
 
 ```{r}
 full_grouped_data <- sapply(
@@ -487,27 +488,30 @@ full_grouped_data
 
 # Analysis problem
 
-The purpose of the data analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. We decided to select the separate and hierachial model and compare their performance based on ELPD value.
+The end purpose of the analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. In order for this to do, we decided to start with 2 similar models, which even if do not fit data well enough will act as a starting point for the future research. More specifically, we decided to select the separate and hierachial autoregressive models and compare their predictive performances based on ELPD values. Finally, in addition to purely numerical analysis, we need to perform a sort of posterior predictive checking that would act as a saninty check and allow us to see if the models are at least somewhat accurate or if we need to come up with something different.
 
 # Models
 
-The dataset features data points in chronological order so it's in our best interest to use time series approach. The model we used is called Autoregressive Model, which is the most commonly used time-series models. Since the dataset only consists data of 10 years, we decided to use the first-order autoregressive model AR(1) which means that the value of year N would depends on year N-1.
+The dataset features data points with timestamps so it seemed to us that the first thing we should do is to try a time-series model. We decided to use Autoregressive model, which is one of the most commonly used time-series models. Since the dataset only contains data for 10 years, we decided to use the first-order autoregressive model AR(1).
 
-There are 2 models in this notebook:
+*There are 2 models analyzed in this notebook:*
 
-1. Heirarchical AR(1) model
+*1. Heirarchical AR(1) model*
 
-2. Separate AR(1) model
+*2. Separate AR(1) model*
 
-To model the number of victim per year, we used Poisson distribution which is popular for modeling the number of times an event occurs in an interval of time. This way, the number of victim in year $y_n$ of each age group will be propotional to the following distribution:
+To model the number of victims per year, we used Poisson distribution which is commonly used for modeling the number of times an event occurs in an interval of time. This way, the number of victim in year $y_n$ of each age group will be propotional to the following distribution:
 
 $$
-y_n \sim poisson(\alpha + \beta y_{n-1})
+y_n \sim poisson(\alpha + \beta \space y_{n-1})
 $$
+Where $\alpha$ and $\beta$ are parameters of the model that are learned from data.
 
 ## Model 1
 
-This is the hierachial AR(1) model. Since we don't have much data and the inter group variation is high we decided to used the non-centered parameterization approach for the hierachial model (the idea to use it to improve the issues mentioned above was adapted from here https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html and here https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html ) rather than the centered one.
+The first model is a hierachial AR(1) model.
+
+Since we don't have much data and the inter group variation is high, we decided to used the non-centered parameterization approach for the hierachial model. See the following sources for more information about the approach and example cases ( https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html,  https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html )
 
 
 ```{stan, output.var="stan_model_ar_hierarchical"}
