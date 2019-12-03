@@ -944,7 +944,10 @@ print(loo_separate)
 plot(loo_separate)
 ```
 
+The results of PSIS-LOO look very similar to those of model 1. In particular, the estimated ELPD value is equal to -509 which is very close to the value obtained for the hierarchical model (which was -509.7). Besides, similarly to the case of model 1, $\hat k$ values for some of the data points exceed the threshold of 0.7. For this reason, and because LOO-CV uses information of "future" datapoints, which is not appropriate in our case, we're doing complete leave-future-out cross validation using the dataset and the separate model.
 
+
+Below are the results of leave-one-future-out cross validation.
 
 ```{r}
 exact_elpd_separate <- get_lfo_cv_results_separate(10000, 2)
@@ -953,7 +956,11 @@ rbind_print(
 )
 ```
 
+The results are close to that of the first model but comperatively worse.  In particular, the ELPD value is at -592.5 as opposed to -582 (for the case of the 2nd model).
+
 ### Graphical posterior predictive checking
+
+Below are the plots of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" and "intervals" plots.
 
 ```{r}
 plot_ppc_ribbons(fit_separate, full_grouped_data)
@@ -963,20 +970,27 @@ plot_ppc_ribbons(fit_separate, full_grouped_data)
 plot_ppc_intervals(fit_separate, full_grouped_data)
 ```
 
+The plots look very similar to those of the first model. Again, it can be seen that the model does not match the data in many cases, the interval is too narrow and in many cases the model is visibly a slightly modified lagged-by-1 version of the true data set. This again can be partly explained by constraints of AR(1), see " Graphical posterior predictive checking" subsection for model 1 for more discussion.
+
 ```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 ```
 
+The error scatter plot looks similar to that of the first model. The discussion and observations of model 1 apply to this case as well.
+
 ### Prior sensitivity analysis
 
-Now let's try another sensible but a little wider prior, while keeping results of the previous fit as our base-line.
+In this section, once again, we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
+
+First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
+
 ```{r}
 # fit_separate_wide_prior = fit_separate_model(10000, 25)
 print(fit_separate_wide_prior)
 ```
 
-Again, ESS and $\hat R$ both look good
+ESS and $\hat R$ both look good
 
 ```{r}
 print_fit_diagnostic(fit_separate_wide_prior, 10)
@@ -990,10 +1004,14 @@ print(loo_separate_wide_prior)
 plot(loo_separate_wide_prior)
 ```
 
+PSIS-LOO -based ELPD estimation is almost the same as in the baseline case.
+
 
 ```{r}
 plot_ppc_ribbons(fit_separate_wide_prior, full_grouped_data)
 ```
+
+Graphically, no noticable differences can be observed from the posterior compared to the baseline case.
 
 ```{r}
 exact_elpd_separate_wide_prior <- get_lfo_cv_results_separate(10000, 25)
@@ -1001,6 +1019,9 @@ rbind_print(
   "LFO" = exact_elpd_separate_wide_prior
 )
 ```
+
+Leave-one-future-out CV -based elpD value just slightly better than in the baseline case; -590 compared to -592.5.
+
 
 Now let's try a stronger more narrow prior
 
@@ -1015,13 +1036,15 @@ Similarly ESS and $\hat R$ are very good.
 print_fit_diagnostic(fit_separate_narrow_prior, 10)
 ```
 
-Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifica convergence diagnostics looks good too.
+Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifics convergence diagnostics looks good too.
 
 ```{r}
 loo_separate_narrow_prior <- get_loo_diagnostics(fit_separate_narrow_prior)
 print(loo_separate_narrow_prior)
 plot(loo_separate_narrow_prior)
 ```
+
+Same results as with the previously tried priors.
 
 ```{r}
 exact_elpd_separate_narrow_prior <- get_lfo_cv_results_separate(2000, 0.5)
@@ -1030,8 +1053,10 @@ rbind_print(
 )
 ```
 
-Rather surprisingly the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously.
+Rather surprisingly, the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously. (the calculations are based on LFO-CV)
 
+
+Finally, error scatter plots are shown below next to each other for better comparison.
 ```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
 y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
@@ -1045,16 +1070,21 @@ plot(plot_baseline)
 plot(plot_narrow_prior)
 ```
 
+It can be seen, that the error pattern is almost exactly the same for all the priors with no or almost no noticable difference.
+
+We thus can conclude that the choice of sensible prior does not significantly affect the posterior, although it does have some effect since we saw slight improvement in ELPD when a stronger prior was tried.
+
 ## Model comparison
 
-Here is a comparison for hierarchical and separate model respectively
+Here is a visual comparison for hierarchical and separate model respectively.
+The plots are the error scatter plots that were already demonstrated, explained and discussed in the previous sections.
 
 ```{r}
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
 ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
 ```
 
-As can be seen the difference between the 2 models is rather small one.
+As can be seen from the plots above and comparison table below, the difference between the 2 models is rather small one. Although, the hierarchical model had slightly better values for ELPD, we were able to obtain very close values with the separate model by using a slightly stringler prior.
 
 ```{r}
 comparison_results = matrix(
@@ -1083,19 +1113,19 @@ comparison_results = matrix(
       "separate (narrow prior)")
   )
 )
-comparison_results
 ```
 
 ```{r}
 kable(comparison_results)
 ```
 
-Thus, we can see that while both of the models (hierarchical and separate are far from being perfect when trying to fit the data), hierarchical is a bit better (according ELPD value obtained as a result of LFO-CV) than the separate model. This is true for the "original" and "wider" priors. However, intereestingly, one can see that the separate model just slightly outperforms the hierarchical one if a stringer prior is used for it.
+Thus, using all the information obtained during the analysis reported in this notebook, we can conclude autoregressive model of 1st order is not a good fit for the data at hand. Graphical posterior predictive checking demonstrated poor fit of both models to the data. For more discussion on the identified problems and potential future improvements, see the next section.
 
-
+Moreover, we observed little difference between separate and hierarchical model even though the initial choice of priors could lead us to believe that the hierarchical model performed slightly better (this can be once again observed from the table shown above). 
 
 # Problems encountered and potential improvements
 
+// one idea is to try negative binomial distribution since it's similar to poisson but has thicker tails (one of the problems identified in the notebook)
 
 # Conclusion
 
