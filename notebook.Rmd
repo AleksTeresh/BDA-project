@@ -711,7 +711,25 @@ The latter prior is wide enough and reasonably constrained at the same time, so 
 
 ### Model diagnostics
 
-Fitting the model using the prior that was concluded to be reasonable in the previous section.
+Fitting the model using the prior that was concluded to be reasonable in the previous section i.e. 
+
+$$
+mu\_group_{\alpha} \sim Normal(0, 10000)
+$$
+
+$$
+mu\_group_{\beta} \sim Normal(0, 2)
+$$
+
+$$
+tau_{\alpha} \sim Cauchy(0, 2000)
+$$
+
+$$
+tau_{\beta} \sim Cauchy(0, 2)
+$$
+
+*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below*
 
 ```{r}
 fit_hierarchical <- fit_hierarchical_model(
@@ -723,7 +741,7 @@ fit_hierarchical <- fit_hierarchical_model(
 print(fit_hierarchical)
 ```
 
-#### Effective sample size
+#### Effective sample size (ESS) diagnostics
 
 According to BDA3 Chapter 11.5, it is generally sufficient to have 10 times the number of chains for effective sample sizes to obtain a reasonable precision from the simulation. Since we're using 7 chains (as can be seen from the output above), we need to make sure that there are at least 7 * 10 = 70 effective sample sizes for each of the parameters.
 
@@ -835,7 +853,7 @@ We can see that for most of the datapoinst, the average error is below 150. More
 
 In this section we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
 
-First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
+First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline. (the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
 
 ```{r}
 fit_hierarchical_wide_prior = fit_hierarchical_model(
@@ -872,6 +890,7 @@ plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
 ```
 
 Both ribbons and intervals visualizations look very similar to the baseline case.
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
 
 ```{r}
 exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(
@@ -889,6 +908,8 @@ ELPD_LFO value is almost exaclty the same as in out baseline case (which was -58
 
 
 *Now let's try a stronger more narrow prior*
+
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
 
 ```{r}
 fit_hierarchical_narrow_prior = fit_hierarchical_model(
@@ -968,11 +989,11 @@ $$
 Below are the priors
 
 $$
-\alpha_i \sim Normal(0, tau_{\alpha\_prior\_SD})
+\alpha_i \sim Normal(0, sigma_{\alpha})
 $$
 
 $$
-\beta_i \sim Normal(0, tau_{\beta})
+\beta_i \sim Normal(0, sigma_{\beta})
 $$
 
 
@@ -1058,7 +1079,18 @@ check_prior_separate(
 
 ### Model diagnostics
 
-Fitting the model with the prior chosen above.
+Fitting the model with the prior chosen above i.e.
+
+
+$$
+\alpha_i \sim Normal(0, 10000)
+$$
+
+$$
+\beta_i \sim Normal(0, 2)
+$$
+
+*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below*
 
 ```{r}
 fit_separate = fit_separate_model(
@@ -1136,6 +1168,8 @@ In this section, once again, we try a couple of different priors and compare the
 
 First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
 
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
 ```{r}
 fit_separate_wide_prior = fit_separate_model(
   alpha_prior_sd = 10000,
@@ -1181,6 +1215,8 @@ Leave-one-future-out CV -based elpD value just slightly better than in the basel
 
 
 Now let's try a stronger more narrow prior
+
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
 
 ```{r}
 fit_separate_narrow_prior = fit_separate_model(
