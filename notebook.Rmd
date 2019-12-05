@@ -606,6 +606,9 @@ parameters {
   real<lower=0> beta_tilde[K];
 }
 transformed parameters {
+  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
+  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
+  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
   real<lower=0> mu[use_lfo_cv ? (N - K) : N];
   
   real alpha[K];
@@ -669,19 +672,37 @@ First, we do prior predictive checking in order to identify a sensible prior to 
 
 
 ```{r}
-check_prior_hierarchical(full_grouped_data, 20000, 20, 5000, 20)
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 20000,
+  mu_group_beta_sd = 20,
+  tau_alpha_sd = 5000,
+  tau_beta_sd = 20
+)
 ```
 
 Roughtly 86.4% of the mass is greater than 10,000. Moreover, a significant part of the mass is for numbers beyond 100000, which seems a little too wide.
 
 ```{r}
-check_prior_hierarchical(full_grouped_data, 20000, 5, 1000, 2)
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 20000,
+  mu_group_beta_sd = 5,
+  tau_alpha_sd = 1000,
+  tau_beta_sd = 2
+)
 ```
 
 Around 70% of the mass is greater than 10,000.
 
 ```{r}
-check_prior_hierarchical(full_grouped_data, 10000, 2, 2000, 2)
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 10000,
+  mu_group_beta_sd = 2,
+  tau_alpha_sd = 2000,
+  tau_beta_sd = 2
+)
 ```
 
 The latter prior seems to be the most reasonable one. About 50% of the mass lies between 0 and 10000. About 5% of the mass is with values greater than 100000.
@@ -693,7 +714,12 @@ The latter prior is wide enough and reasonably constrained at the same time, so 
 Fitting the model using the prior that was concluded to be reasonable in the previous section.
 
 ```{r}
-fit_hierarchical <- fit_hierarchical_model(10000, 2, 2000, 2)
+fit_hierarchical <- fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 2,
+  tau_alpha_prior_sd = 2000,
+  tau_beta_prior_sd = 2
+)
 print(fit_hierarchical)
 ```
 
@@ -729,8 +755,8 @@ The utility function below prints the number of iterations that sanurated the ma
 The utility function uses the code from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R
 
 ```{r}
-print_fit_diagnostic(fit_hierarchical, 10)
-print_fit_diagnostic(fit_hierarchical, 15)
+print_fit_diagnostic(fit_hierarchical, tree_depth = 10)
+print_fit_diagnostic(fit_hierarchical, tree_depth = 15)
 ```
 
 Quoting from https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "The dynamic implementation of Hamiltonian Monte Carlo used in Stan has a maximum trajectory length built in to avoid infinite loops that can occur for non-identified models. For sufficiently complex models, however, Stan can saturate this threshold even if the model is identified, which limits the efficacy of the sampler."
@@ -760,7 +786,12 @@ plot(loo_hierarchical)
 We can see from the print out above that $\hat k$ values for some of the datapoints are above 0.7. Becasause of this and because PSIS-LOO uses data from the future datapoints, we cannot fully rely on ELPD shown above (the result might be overoptimistic). For these reasons, we'll do a true (as opposed to PSIS approximation) leave-future-out corss validation. The code used in the function below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html.
 
 ```{r}
-exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(10000, 2, 2000, 2)
+exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 2,
+  tau_alpha_prior_sd = 2000,
+  tau_beta_prior_sd = 2
+)
 rbind_print(
   "LFO" = exact_elpd_hierarchical
 )
@@ -807,14 +838,19 @@ In this section we try a couple of different priors and compare the results obta
 First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
 
 ```{r}
-fit_hierarchical_wide_prior = fit_hierarchical_model(100000, 25, 10000, 25) # wider prior
+fit_hierarchical_wide_prior = fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 100000,
+  mu_group_beta_prior_sd = 25,
+  tau_alpha_prior_sd = 10000,
+  tau_beta_prior_sd = 25
+) # wider prior
 print(fit_hierarchical_wide_prior)
 ```
 
 Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
 
 ```{r}
-print_fit_diagnostic(fit_hierarchical_wide_prior, 15)
+print_fit_diagnostic(fit_hierarchical_wide_prior, tree_depth = 15)
 ```
 
 No iterations saturated the maximum tree depth of 15 and there were only 5 divergences out of 21000, which is good enough for us to proceed with the model.
@@ -838,7 +874,12 @@ plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
 Both ribbons and intervals visualizations look very similar to the baseline case.
 
 ```{r}
-exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(100000, 25, 10000, 25)
+exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 100000,
+  mu_group_beta_prior_sd = 25,
+  tau_alpha_prior_sd = 10000,
+  tau_beta_prior_sd = 25
+)
 rbind_print(
   "LFO" = exact_elpd_hierarchical_wide_prior
 )
@@ -850,14 +891,19 @@ ELPD_LFO value is almost exaclty the same as in out baseline case (which was -58
 *Now let's try a stronger more narrow prior*
 
 ```{r}
-fit_hierarchical_narrow_prior = fit_hierarchical_model(2000, 0.5, 10, 0.1)
+fit_hierarchical_narrow_prior = fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 2000,
+  mu_group_beta_prior_sd = 0.5,
+  tau_alpha_prior_sd = 10,
+  tau_beta_prior_sd = 0.1
+)
 print(fit_hierarchical_narrow_prior)
 ```
 
 Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
 
 ```{r}
-print_fit_diagnostic(fit_hierarchical_narrow_prior, 15)
+print_fit_diagnostic(fit_hierarchical_narrow_prior, tree_depth = 15)
 ```
 
 No tree depth saturations and 0 divergences, which is even better compared to the previous cases where we did have a negligible number of divergences.
@@ -881,7 +927,12 @@ plot_ppc_intervals(fit_hierarchical_narrow_prior, full_grouped_data)
 Similarly to the case of the wider prior, no noticable difference can be observed from the plots above compared to the other priors.
 
 ```{r}
-exact_elpd_hierarchical_narrow_prior <- get_lfo_cv_results_hierarchical(2000, 0.5, 10, 0.1)
+exact_elpd_hierarchical_narrow_prior <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 2000,
+  mu_group_beta_prior_sd = 0.5,
+  tau_alpha_prior_sd = 10,
+  tau_beta_prior_sd = 0.1
+)
 rbind_print(
   "LFO" = exact_elpd_hierarchical_narrow_prior
 )
@@ -941,6 +992,9 @@ parameters {
   real<lower=0> beta[K];
 }
 transformed parameters {
+  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
+  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
+  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
   real<lower=0> mu[use_lfo_cv ? (N - K) : N];
   
   for (n in 1:K) {
@@ -993,7 +1047,13 @@ generated quantities {
 Similar to the previous model we first conduct prior predictive checking to come up with a sensible prior. The similar assumption as in Model 1 are used here to select our prior. Based on these, we decided to proceed with the first one because while being sufficiently wide, the data generated with it seemed sensible to us.
 
 ```{r}
-check_prior_separate(full_grouped_data, 0, 10000, 0, 2)
+check_prior_separate(
+  full_grouped_data,
+  alpha_prior_mean = 0,
+  alpha_prior_sd = 10000,
+  beta_prior_mean = 0,
+  beta_prior_sd = 2
+)
 ```
 
 ### Model diagnostics
@@ -1001,7 +1061,10 @@ check_prior_separate(full_grouped_data, 0, 10000, 0, 2)
 Fitting the model with the prior chosen above.
 
 ```{r}
-fit_separate = fit_separate_model(10000, 2)
+fit_separate = fit_separate_model(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 2
+)
 print(fit_separate)
 ```
 
@@ -1014,7 +1077,7 @@ All of the $\hat R$ values look good and ESS values are all well above 10000, wh
 #### HMC -specific convergence diagnostics
 
 ```{r}
-print_fit_diagnostic(fit_separate, 10)
+print_fit_diagnostic(fit_separate, tree_depth = 10)
 ```
 
 HMC -specific convergence diagnostics looks good too.
@@ -1035,7 +1098,10 @@ The results of PSIS-LOO look very similar to those of model 1. In particular, th
 Below are the results of leave-one-future-out cross validation.
 
 ```{r}
-exact_elpd_separate <- get_lfo_cv_results_separate(10000, 2)
+exact_elpd_separate <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 2
+)
 rbind_print(
   "LFO" = exact_elpd_separate
 )
@@ -1071,14 +1137,17 @@ In this section, once again, we try a couple of different priors and compare the
 First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
 
 ```{r}
-fit_separate_wide_prior = fit_separate_model(10000, 25)
+fit_separate_wide_prior = fit_separate_model(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 25
+)
 print(fit_separate_wide_prior)
 ```
 
 ESS and $\hat R$ both look good
 
 ```{r}
-print_fit_diagnostic(fit_separate_wide_prior, 10)
+print_fit_diagnostic(fit_separate_wide_prior, tree_depth = 10)
 ```
 
 No tree depth saturations and only 2 divergences per 21000 iterations.
@@ -1099,7 +1168,10 @@ plot_ppc_ribbons(fit_separate_wide_prior, full_grouped_data)
 Graphically, no noticable differences can be observed from the posterior compared to the baseline case.
 
 ```{r}
-exact_elpd_separate_wide_prior <- get_lfo_cv_results_separate(10000, 25)
+exact_elpd_separate_wide_prior <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 25
+)
 rbind_print(
   "LFO" = exact_elpd_separate_wide_prior
 )
@@ -1111,14 +1183,17 @@ Leave-one-future-out CV -based elpD value just slightly better than in the basel
 Now let's try a stronger more narrow prior
 
 ```{r}
-fit_separate_narrow_prior = fit_separate_model(2000, 0.5)
+fit_separate_narrow_prior = fit_separate_model(
+  alpha_prior_sd = 2000,
+  beta_prior_sd = 0.5
+)
 print(fit_separate_narrow_prior)
 ```
 
 Similarly ESS and $\hat R$ are very good.
 
 ```{r}
-print_fit_diagnostic(fit_separate_narrow_prior, 10)
+print_fit_diagnostic(fit_separate_narrow_prior, tree_depth = 10)
 ```
 
 Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifics convergence diagnostics looks good too.
@@ -1132,7 +1207,10 @@ plot(loo_separate_narrow_prior)
 Same results as with the previously tried priors.
 
 ```{r}
-exact_elpd_separate_narrow_prior <- get_lfo_cv_results_separate(2000, 0.5)
+exact_elpd_separate_narrow_prior <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 2000,
+  beta_prior_sd = 0.5
+)
 rbind_print(
   "LFO" = exact_elpd_separate_narrow_prior
 )
