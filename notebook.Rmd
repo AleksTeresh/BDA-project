@@ -107,7 +107,7 @@ check_prior_hierarchical <- function(
         
         if (beta >= 0) {
           passed = TRUE
-          # starting with 2nd day becase AR(1) model is used (no meaningful fit for the first point)
+          # starting from 2nd day becase AR(1) model is used (no meaningful fit for the first point)
           for (i in 2:D) { 
             mu = alpha + beta * full_grouped_data[j, i-1]
             if (mu < 0) {
@@ -122,7 +122,7 @@ check_prior_hierarchical <- function(
         }
       }
       
-      # starting with 2nd day becase AR(1) model is used
+      # starting from 2nd day becase AR(1) model is used
       for (i in 2:D) { 
         mu = alpha + beta * full_grouped_data[j, i-1]
         
@@ -217,11 +217,11 @@ get_lfo_cv_results_hierarchical <- function(
   for (i in seq(N, L+1, -1)) {
     full_grouped_data_i <- full_grouped_data[, (1:i)]
     stan_data_i = list(
-      N = (i-1) * 11,
-      K = 11,
+      N = (i-1) * K,
+      K = K,
       x = rep(1:nrow(full_grouped_data_i), i - 1),
-      y = tail(c(full_grouped_data_i), -11),
-      y0 = head(c(full_grouped_data_i), 11),
+      y = tail(c(full_grouped_data_i), -K),
+      y0 = head(c(full_grouped_data_i), K),
       mu_group_alpha_prior_sd = mu_group_alpha_prior_sd,
       mu_group_beta_prior_sd = mu_group_beta_prior_sd,
       tau_alpha_prior_sd = tau_alpha_prior_sd,
@@ -341,11 +341,11 @@ get_lfo_cv_results_separate <- function(alpha_prior_sd, beta_prior_sd) {
   for (i in seq(N, L+1, -1)) {
     full_grouped_data_i <- full_grouped_data[, (1:i)]
     stan_data_i = list(
-      N = (i-1) * 11,
-      K = 11,
+      N = (i-1) * K,
+      K = K,
       x = rep(1:nrow(full_grouped_data_i), i - 1),
-      y = tail(c(full_grouped_data_i), -11),
-      y0 = head(c(full_grouped_data_i), 11),
+      y = tail(c(full_grouped_data_i), -K),
+      y0 = head(c(full_grouped_data_i), K),
       alpha_prior_sd = alpha_prior_sd,
       beta_prior_sd = beta_prior_sd,
       use_lfo_cv = 1
@@ -443,7 +443,7 @@ plot_ppc_ribbons <- function(fit, true_data) {
 plot_ppc_intervals <- function(fit, true_data) {
   y_rep <- as.matrix(fit, pars = "y_rep")
   plots <- lapply(
-    list(1, 5, 8),
+    list(1, 5, 8), # only show plots 1st, 5th and 8th groups
     function(group_idx) {
       indexes <- seq(group_idx, 99, 11)
       ppc_intervals(
@@ -461,7 +461,9 @@ plot_ppc_intervals <- function(fit, true_data) {
 
 # Introduction
 
-Finland is often praised for its achievements on overall safety and very low crime rate, yet a [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that 130,000 people were victims of domestic violence. Moreover, according to this [source](https://yle.fi/uutiset/osasto/news/finland_is_eus_second_most_violent_country_for_women/7120601), Finland was EU’s second most violent country for women in 2014. Taken by surprise by this information, we decided to look more into the issue. Eventually, it seemed like a great idea to us to use the dataset described below as a basis for the project to understand the issue ourselves and to raise awareness among other students. In this notebook, we study the number of domestic violence cases per year grouped by victims' age categories.
+Finland is often praised for its achievements in overall safety and very low crime rates, yet the [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that 130,000 people were victims of domestic violence in 2017. Moreover, according to this [source](https://yle.fi/uutiset/osasto/news/finland_is_eus_second_most_violent_country_for_women/7120601), Finland was EU’s second most violent country for women in 2014. Taken by surprise by this information, we decided to look more into the issue. Eventually, it seemed like a great idea to us to use the dataset described below as a basis for the project to understand the issue ourselves and to raise awareness among other students. In this notebook, we study the number of domestic violence cases per year grouped by victims' age categories.
+
+The rest of the notebook is structured as following. First, the dataset is described in more details and the analysis problem is stated. Then the 2 models are presented. For each of the models, we conduct prior predictive checking, convergence diagnostics, posterior predictive checking and evaluate their predictive performance based on ELPD values obtained by approximation using PSIS-LOO as well as using leave-one-future-out cross-validation to obtain a more reliable value for ELPD. Besides, prior sensitivity analysis is done for each of the models. Then, the models are compared based on the ELPD values, which is followed by a short related discussion. Finally, encountered problems are discussed and potential future improvements are proposed. We finish the report by drawing several conclusions.
 
 # Data description
 
@@ -480,8 +482,10 @@ We visuallize the number of victim per year for each age group
 ageGroups <- unique(data$Victim.s.age)
 grouped_data <- c()
 
+group_count = 11
+
 plots <- lapply(
-  seq(1, 11),
+  seq(1, group_count),
   function(i) {
     data_for_age_group <- filter(data, Victim.s.age == ageGroups[i])
      ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
