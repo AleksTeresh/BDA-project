@@ -1174,4 +1174,6 @@ This section discusses some of the identified problems and proposes some of the 
 
 # Conclusion
 
-// a clear conclusion here
+In the report, we tried to fit 2 different autoregressive models to the data at hand and analysed the results. The data (the number of domestic violence cases reported from 2009 to 2018) was partitioned into 11 groups by the age of the victim. After conducting a thorough analysis of the models, we came to a conclusion that both models fit the data quite poorly. Besides, according to the results obtained, there was little difference in predictive performance between the hierarchical and separate models. Thus, none of the models can be reliably used for predicting the number of reported cases in the future. Several specific issues encountered were documented and some of the idea about future improvements proposed in the previous section.
+
+
