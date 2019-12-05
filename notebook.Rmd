@@ -467,16 +467,18 @@ The rest of the notebook is structured as following. First, the dataset is descr
 
 # Data description
 
-The dataset was obtained from Tilastokeskus [Statistic Finland](https://yle.fi/uutiset/osasto/news/increase_in_reported_domestic_violence_cases_in_finland/10818387) and contains data about the number of victims by age groups from 2009 to 2018. There are 11 age groups in total, which are [0-4], [5-9], [10-14], [15-17], [18-20], [21-24], [25-34], [35-44], [45-54], [55-64] and [65-].
+The dataset was obtained from Tilastokeskus [Statistic Finland](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/) and contains data about the number cases of domestic violence and intimate partner violence reported as offence.
 
-More information about the dataset could by found following [this link](https://www.stat.fi/til/rpk/2018/15/rpk_2018_15_2019-06-06_tie_001_en.html)
+We decided to look at 3 dimensions in the data: year, victim's age and number of victims. We grouped the data about number of victims by year and victim's age. More specifically,there are 11 age groups in total, which are -4, 5-9, 10-14, 15-17, 18-20, 21-24, 25-34, 35-44, 45-54, 55-64 and 65- .
+
+More information about the dataset could by found following [this link](https://www.stat.fi/til/rpk/2018/15/rpk_2018_15_2019-06-06_tie_001_en.html) or [this link](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/)
 
 ```{r}
 data = read.csv("dataset.csv", header = TRUE, sep=";")
 data
 ```
 
-We visuallize the number of victim per year for each age group 
+We visuallize the number of victims per year for each age group 
 
 ```{r}
 ageGroups <- unique(data$Victim.s.age)
@@ -520,7 +522,9 @@ full_grouped_data
 
 # Analysis problem
 
-The end purpose of the analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. In order for this to do, we decided to start with 2 similar models, which even if do not fit data well enough will act as a starting point for the future research. More specifically, we decided to select the separate and hierachial autoregressive models and compare their predictive performances based on ELPD values. Finally, in addition to purely numerical analysis, we need to perform a sort of posterior predictive checking that would act as a saninty check and allow us to see if the models are at least somewhat accurate or if we need to come up with something different.
+Having a model that fits the time-series data as well as being able to predict the numbers for upcoming years is of great importance for academic research. Besides, it can have various applications when trying to solve the problem of domestic violence on societal level.
+
+The end purpose of the analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. In order to do this, we decided to start with 2 similar models, which even if do not fit the data well enough, will act as a starting point for the future research. More specifically, we decided to select the separate and hierachial autoregressive models and compare their predictive performances based on ELPD values. Finally, in addition to purely numerical analysis, we need to perform a sort of posterior predictive checking that would act as a saninty check and allow us to see if the models are at least somewhat accurate or if we need to come up with something better.
 
 # Models
 
@@ -537,11 +541,45 @@ To model the number of victims per year, we used Poisson distribution which is c
 $$
 y_n \sim poisson(\alpha + \beta \space y_{n-1})
 $$
-Where $\alpha$ and $\beta$ are parameters of the model that are learned from data.
+Where $\alpha$ and $\beta$ are parameters of the model.
 
 ## Model 1
 
-The first model is a hierachial AR(1) model. We decided to use Poisson distribution to model number of domestic violence cases reported since it is a distribution commonly used for modelling the probability of a given number of events occurring in a fixed interval of time or space if these events occur with a known constant mean rate and independently of the time since the last event (see https://en.wikipedia.org/wiki/Poisson_distribution). Moreover, we decided to use normal distribution for $\alpha$ and $\beta,$ and normal and cauchy for hierarchical parameters. The reason for the latter choice is for the lack of a reason to use any other distributions and because those are commonly used as "default" choices. for modelling mean and standard deviation.
+The first model is a hierachial AR(1) model. We decided to use Poisson distribution to model number of domestic violence cases reported since it is a distribution commonly used for modelling the probability of a given number of events occurring in a fixed interval of time or space if these events occur with a known constant mean rate and independently of the time since the last event (see https://en.wikipedia.org/wiki/Poisson_distribution). Moreover, we decided to use normal distribution for $\alpha$ and $\beta,$ and normal and cauchy for hierarchical parameters. The reason for the latter choice is for the lack of a reason to use any other distributions and because those are commonly used as "default" choices. for modelling mean and standard deviation. Below are are the equations describing the model.
+
+
+$$
+y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
+$$
+
+$$
+\alpha_i \sim Normal(mu\_group_{\alpha}, tau_{\alpha})
+$$
+
+$$
+\beta_i \sim Normal(mu\_group_{\beta}, tau_{\beta})
+$$
+
+Below are the priors for the hierarchical parameters
+
+$$
+mu\_group_{\alpha} \sim Normal(0, mu\_group\_prior\_SD_{\alpha})
+$$
+
+$$
+mu\_group_{\beta} \sim Normal(0, mu\_group\_prior\_SD_{\beta})
+$$
+
+$$
+tau_{\alpha} \sim Cauchy(0, tau\_prior\_SD_{\alpha})
+$$
+
+$$
+tau_{\beta} \sim Cauchy(0, tau\_prior\_SD_{\beta})
+$$
+
+Where $i$ stands for the index of the $i$'th age group.
+
 
 Since we don't have much data and the inter group variation is high, we decided to used the non-centered parameterization approach for the hierachial model. See the following sources for more information about the approach and example cases ( https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html,  https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html )
 
@@ -870,7 +908,22 @@ Thus, based on the plots above and comparing ELDP values obtained using LFO-CV f
 
 ## Model 2
 
-This is the separate AR(1) model. In this model, we assume that there is no co-dependence between the age groups. As was explained previously (see Model 1 section), Poisson distribution was chosen since it is a common choice when modelling the number of events that occured over a period of time. Normal distribution was chosen for priors since we couldn't find any strong reason to use any other distribution (at least as the starting point) i.e. as the default choice.
+This is the separate AR(1) model. In this model, we assume that there is no co-dependence between the age groups. As was explained previously (see Model 1 section), Poisson distribution was chosen since it is a common choice when modelling the number of events that occured over a period of time. Normal distribution was chosen for priors since we couldn't find any strong reason to use any other distribution (at least as the starting point) i.e. as the default choice. Below are some of the equations describing the separate model.
+
+$$
+y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
+$$
+
+Below are the priors
+
+$$
+\alpha_i \sim Normal(0, tau_{\alpha\_prior\_SD})
+$$
+
+$$
+\beta_i \sim Normal(0, tau_{\beta})
+$$
+
 
 ```{stan, output.var="stan_model_ar_separate"}
 data {
