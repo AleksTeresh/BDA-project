@@ -41,7 +41,1309 @@ set.seed(SEED)
 options(max.print=1000000)
 ```
 
-# Utility functions
+
+```{r, echo = F}
+# plot a histogram with percentages instead of frequencies 
+partial_percentage_hist <- function(
+  data,
+  upper_limit
+) {
+  truncated_data = data[data < upper_limit]
+  h <- hist(truncated_data, plot = FALSE)
+  h$density <- h$counts / sum(h$counts) * 100
+  plot(
+    h,
+    freq=F,
+    xlab='Number of reported cases',
+    ylab='Percentage',
+    col = '#6eb5db',
+    main = 'Percentage histogram of the number of reported cases based on prior'
+  )
+}
+
+# prior preditive checking for hierarchical model
+check_prior_hierarchical <- function(
+  full_grouped_data, 
+  mu_group_alpha_sd,
+  mu_group_beta_sd,
+  tau_alpha_sd,
+  tau_beta_sd
+) {
+  N = 5000 # number of samples to draw
+  K = 11 # number of hierarchical groups
+  D = 10 # number of datapoints for each group (i.e. number of years)
+  
+  counter_1e7 = 0
+  counter_1e6 = 0
+  counter_1e5 = 0
+  counter_1e4 = 0
+  
+  y_pred_prior = array(rep(1, N*K*D), dim=c(N, K, D-1)) # initialize an empty array to hold data
+  
+  for (j in 1:K) { # number of age groups
+    mu_group_alpha = rnorm(N, 0, mu_group_alpha_sd)
+      
+    for (q in 1:N) {
+      mu_group_beta = rnorm(1, 0, mu_group_beta_sd)
+      
+      while (mu_group_beta < 0) {
+        mu_group_beta = rnorm(1, 0, mu_group_beta_sd)
+      }
+      
+      while (TRUE) {
+        tau_alpha = rcauchy(1, 0, tau_alpha_sd)
+        tau_beta = rcauchy(1, 0, tau_beta_sd)
+        
+        while (tau_alpha < 0 || tau_beta < 0) {
+          tau_alpha = rcauchy(1, 0, tau_alpha_sd)
+          tau_beta = rcauchy(1, 0, tau_beta_sd)
+        }
+        
+        alpha = rnorm(1, mu_group_alpha[q], tau_alpha)
+        beta = rnorm(1, mu_group_beta, tau_beta)
+        
+        if (beta >= 0) {
+          passed = TRUE
+          # starting from 2nd day becase AR(1) model is used (no meaningful fit for the first point)
+          for (i in 2:D) { 
+            mu = alpha + beta * full_grouped_data[j, i-1]
+            if (mu < 0) {
+              passed = FALSE
+              break
+            }
+          }
+          
+          if (passed) {
+            break
+          }  
+        }
+      }
+      
+      # starting from 2nd day becase AR(1) model is used
+      for (i in 2:D) { 
+        mu = alpha + beta * full_grouped_data[j, i-1]
+        
+        if (mu > 0) {
+          y_pred = rpois(1, mu)
+          
+          if (y_pred > 1e7) {
+            counter_1e7 = counter_1e7 + 1
+          }
+          if (y_pred > 1e6) {
+            counter_1e6 = counter_1e6 + 1
+          }
+          if (y_pred > 1e5) {
+            counter_1e5 = counter_1e5 + 1
+          }
+          if (y_pred > 1e4) {
+            counter_1e4 = counter_1e4 + 1
+          }
+    
+          y_pred_prior[q, j, i-1] <- y_pred
+        }
+      }
+    }
+  }
+  
+  print(paste0('Percentage of the mass that are greater than 10,000,000:  ' , round(counter_1e7 * 100 / (N * K * (D - 1)), 3)))
+  print(paste0('Percentage of the mass that are greater than 1,000,000:  ' , round(counter_1e6 * 100 / (N * K * (D - 1)), 3))) 
+  print(paste0('Percentage of the mass that are greater than 100,000:  ' , round(counter_1e5 * 100/ (N * K * (D - 1)),3)))
+  print(paste0('Percentage of the mass that are greater than 10,000:  ' , round(counter_1e4 * 100/ (N * K * (D - 1)),3)))
+  
+  plot1 <- partial_percentage_hist(y_pred_prior, 1e6)
+  plot2 <- partial_percentage_hist(y_pred_prior, 1e5)
+  plot3 <- partial_percentage_hist(y_pred_prior, 1e4)
+}
+
+# HMC specific convergence diagnostics
+print_fit_diagnostic <- function(fit, tree_depth) {
+  check_treedepth(fit, tree_depth)
+  check_divergences(fit)
+}
+
+# do PSIS-LOO for the fit ommitting first 4 years out of 10
+get_loo_diagnostics <- function(fit) {
+  N <- 99
+  # our fit does not have data for the first year already, so we only need to remove 3 years from the beginning
+  L <- 11 * 3
+  
+  log_lik_all <- extract_log_lik(fit, merge_chains = FALSE)
+  log_lik <- log_lik_all[, , (L+1):N]
+  
+  r_eff <- relative_eff(exp(log_lik))
+  loo(log_lik, r_eff = r_eff)
+}
+
+########
+# The code below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html
+# more stable than log(sum(exp(x))) 
+log_sum_exp <- function(x) {
+  max_x <- max(x)  
+  max_x + log(sum(exp(x - max_x)))
+}
+
+# more stable than log(mean(exp(x)))
+log_mean_exp <- function(x) {
+  log_sum_exp(x) - log(length(x))
+}
+
+# compute log of raw importance ratios
+# sums over observations *not* over posterior samples
+sum_log_ratios <- function(ll, ids = NULL) {
+  if (!is.null(ids)) ll <- ll[, ids, drop = FALSE]
+  - rowSums(ll)
+}
+
+# for printing comparisons later
+rbind_print <- function(...) {
+  round(rbind(...), digits = 2)
+}
+
+get_lfo_cv_results_hierarchical <- function(
+  mu_group_alpha_prior_sd,
+  mu_group_beta_prior_sd,
+  tau_alpha_prior_sd,
+  tau_beta_prior_sd
+) {
+  N = 10 # numebr of data points for eahc group
+  L = 4 # number of datapoints to skip from the start
+  K = 11 # number of age groups
+  
+  loglik_exact_hierarchical <- matrix(nrow = 10000, ncol = N * K)
+  
+  for (i in seq(N, L+1, -1)) {
+    full_grouped_data_i <- full_grouped_data[, (1:i)]
+    stan_data_i = list(
+      N = (i-1) * K,
+      K = K,
+      x = rep(1:nrow(full_grouped_data_i), i - 1),
+      y = tail(c(full_grouped_data_i), -K),
+      y0 = head(c(full_grouped_data_i), K),
+      mu_group_alpha_prior_sd = mu_group_alpha_prior_sd,
+      mu_group_beta_prior_sd = mu_group_beta_prior_sd,
+      tau_alpha_prior_sd = tau_alpha_prior_sd,
+      tau_beta_prior_sd = tau_beta_prior_sd,
+      use_lfo_cv = 1
+    )
+    fit_i = sampling(
+      stan_model_ar_hierarchical,
+      data = stan_data_i,
+      seed = 12452,
+      refresh=0,
+      iter = 5000,
+      control=list(max_treedepth=15)
+    )
+    last_K_values <- seq(((i-2) * K + 1), ((i - 1) * K))
+    loglik_exact_hierarchical[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
+  }
+  
+  exact_elpds_1sap <- apply(loglik_exact_hierarchical, 2, log_mean_exp)
+  
+  c(ELPD = sum(exact_elpds_1sap[34:99]))
+}
+#####
+# End of the code adapted from http://mc-stan.org/loo/articles/loo2-lfo.html
+
+check_prior_separate <- function(
+  full_grouped_data, 
+  alpha_prior_mean,
+  alpha_prior_sd,
+  beta_prior_mean,
+  beta_prior_sd
+) {
+  N = 3000 # number of (succesfull) samples to draw
+  K = 11 # number of groups
+  D = 10 # number of datapoints (i.e. number of years)
+  
+  counter_1e7 = 0
+  counter_1e6 = 0
+  counter_1e5 = 0
+  counter_1e4 = 0
+  
+  # initiaalize an empty array to hold data
+  y_pred_prior = array(rep(1, N*K*D), dim=c(N, K, D-1))
+  
+  for (j in 1:K) { # number of age groups
+    for (q in 1:N) {
+      while (TRUE) {
+        alpha = rnorm(1, alpha_prior_mean, alpha_prior_sd)
+        beta = rnorm(1, beta_prior_mean, beta_prior_sd)
+        
+        passed = TRUE
+         # starting with 2nd day becase AR(1) model is used
+        for (i in 2:D) {
+          mu = alpha + beta * full_grouped_data[j, i-1]
+          if (mu < 0) {
+            passed = FALSE
+            break
+          }
+        }
+        
+        if (passed) {
+          break
+        }
+      }
+      
+      for (i in 2:D) { # starting with 2nd day becase AR(1) model is used
+        mu = alpha + beta * full_grouped_data[j, i-1]
+        
+        if (mu > 0) {
+          y_pred = rpois(1, mu)
+          
+          if (y_pred > 1e7) {
+            counter_1e7 = counter_1e7 + 1
+          }
+          if (y_pred > 1e6) {
+            counter_1e6 = counter_1e6 + 1
+          }
+          if (y_pred > 1e5) {
+            counter_1e5 = counter_1e5 + 1
+          }
+          if (y_pred > 1e4) {
+            counter_1e4 = counter_1e4 + 1
+          }
+  
+          y_pred_prior[q, j, i-1] <- y_pred
+        }
+      }
+    }
+  }
+  
+  print(paste0(
+    'Percentage of the mass that are greater than 10,000,000:  ' ,
+    round(counter_1e7 * 100 / (N * K * (D - 1)), 3)))
+  print(paste0(
+    'Percentage of the mass that are greater than 1,000,000:  ' ,
+    round(counter_1e6 * 100 / (N * K * (D - 1)), 3))) 
+  print(paste0(
+    'Percentage of the mass that are greater than 100,000:  ' ,
+    round(counter_1e5 * 100/ (N * K * (D - 1)),3)))
+  print(paste0(
+    'Percentage of the mass that are greater than 10,000:  ' ,
+    round(counter_1e4 * 100/ (N * K * (D - 1)),3)))
+  
+  partial_percentage_hist(y_pred_prior, 1e6)
+  partial_percentage_hist(y_pred_prior, 1e5)
+  partial_percentage_hist(y_pred_prior, 1e4)
+}
+
+# LFO-CV for separate model
+get_lfo_cv_results_separate <- function(alpha_prior_sd, beta_prior_sd) {
+  N = 10
+  L = 4
+  K = 11
+  
+  loglik_exact_separate <- matrix(nrow = 10000, ncol = N * K)
+  
+  for (i in seq(N, L+1, -1)) {
+    full_grouped_data_i <- full_grouped_data[, (1:i)]
+    stan_data_i = list(
+      N = (i-1) * K,
+      K = K,
+      x = rep(1:nrow(full_grouped_data_i), i - 1),
+      y = tail(c(full_grouped_data_i), -K),
+      y0 = head(c(full_grouped_data_i), K),
+      alpha_prior_sd = alpha_prior_sd,
+      beta_prior_sd = beta_prior_sd,
+      use_lfo_cv = 1
+    )
+    fit_i = sampling(
+      stan_model_ar_separate,
+      data = stan_data_i,
+      seed = 12452,
+      refresh=0,
+      iter = 5000,
+      control=list(max_treedepth=15)
+    )
+    last_K_values <- seq(((i-2) * K + 1), ((i - 1) * K))
+    loglik_exact_separate[, last_K_values] <- extract_log_lik(fit_i)[, last_K_values]
+  }
+  
+  exact_elpds_1sap <- apply(loglik_exact_separate, 2, log_mean_exp)
+  c(ELPD = sum(exact_elpds_1sap[34:99]))
+}
+
+fit_hierarchical_model <- function(
+  mu_group_alpha_prior_sd,
+  mu_group_beta_prior_sd,
+  tau_alpha_prior_sd,
+  tau_beta_prior_sd
+) {
+  nrows <- nrow(full_grouped_data)
+  stan_data = list(
+    N = (2018-2010+1) * 11,
+    K = 11,
+    x = rep(1:nrow(full_grouped_data), 9),
+    y = tail(c(full_grouped_data), -11),
+    y0 = head(c(full_grouped_data), 11),
+    mu_group_alpha_prior_sd = mu_group_alpha_prior_sd,
+    mu_group_beta_prior_sd = mu_group_beta_prior_sd,
+    tau_alpha_prior_sd = tau_alpha_prior_sd,
+    tau_beta_prior_sd = tau_beta_prior_sd,
+    use_lfo_cv = 0 
+  )
+  fit_hierarchical = sampling(
+    stan_model_ar_hierarchical,
+    data = stan_data,
+    seed = 12452,
+    refresh = 0,
+    chains = 7,
+    iter = 6000,
+    control=list(max_treedepth=15)
+  )
+  
+  fit_hierarchical
+}
+
+fit_separate_model <- function(alpha_prior_sd, beta_prior_sd) {
+  nrows <- nrow(full_grouped_data)
+  stan_data = list(
+    N = (2018-2010+1) * 11,
+    K = 11,
+    x = rep(1:nrow(full_grouped_data), 9),
+    y = tail(c(full_grouped_data), -11),
+    y0 = head(c(full_grouped_data), 11),
+    alpha_prior_sd = alpha_prior_sd,
+    beta_prior_sd = beta_prior_sd,
+    use_lfo_cv = 0 
+  )
+  fit_separate = sampling(
+    stan_model_ar_separate,
+    data = stan_data,
+    seed = 12452,
+    refresh=0,
+    chains = 7,
+    iter = 6000
+  )
+  
+  fit_separate
+}
+
+plot_ppc_ribbons <- function(fit, true_data) {
+  y_rep <- as.matrix(fit, pars = "y_rep")
+  plots <- lapply(
+    seq(1, 11),
+    function(group_idx) {
+      indexes <- seq(group_idx, 99, 11)
+      ppc_ribbon(
+        c(true_data[group_idx, (2:10)]),
+        y_rep[, indexes],
+        x = seq(2010, 2018)
+      )
+    }
+  )
+  
+  grid.arrange(grobs = plots[1:6], ncol = 2)
+  grid.arrange(grobs = plots[7:11], ncol = 2) 
+}
+
+plot_ppc_intervals <- function(fit, true_data) {
+  y_rep <- as.matrix(fit, pars = "y_rep")
+  plots <- lapply(
+    list(1, 5, 8), # only show plots 1st, 5th and 8th groups
+    function(group_idx) {
+      indexes <- seq(group_idx, 99, 11)
+      ppc_intervals(
+        c(true_data[group_idx, (2:10)]),
+        y_rep[, indexes],
+        x = seq(2010, 2018)
+      )
+    }
+  )
+  
+  plots 
+}
+```
+
+*Note: * most of the code chunks in the notebook are a single call to a function that does all the work under the hood. Implementations of all the functions used can be found at the end of the notebook in the Appendix section. 
+
+
+# Introduction
+
+Finland is often praised for its achievements in overall safety and very low crime rates, yet the [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that 130,000 people were victims of domestic violence in 2017. Moreover, according to this [source](https://yle.fi/uutiset/osasto/news/finland_is_eus_second_most_violent_country_for_women/7120601), Finland was EU’s second most violent country for women in 2014. Taken by surprise by this information, we decided to look more into the issue. Eventually, it seemed like a great idea to us to use the dataset described below as a basis for the project to understand the issue ourselves and to raise awareness among other students. In this notebook, we study the number of domestic violence cases per year grouped by victims' age categories.
+
+The rest of the notebook is structured as following. First, the dataset is described in more details and the analysis problem is stated. Then the 2 models are presented. For each of the models, we conduct prior predictive checking, convergence diagnostics, posterior predictive checking and evaluate their predictive performance based on ELPD values obtained by approximation using PSIS-LOO as well as using leave-one-future-out cross-validation to obtain a more reliable value for ELPD. Besides, prior sensitivity analysis is done for each of the models. Then, the models are compared based on the ELPD values, which is followed by a short related discussion. Finally, encountered problems are discussed and potential future improvements are proposed. We finish the report by drawing several conclusions.
+
+# Data description
+
+The dataset was obtained from Tilastokeskus [Statistic Finland](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/) and contains data about the number cases of domestic violence and intimate partner violence reported as offence.
+
+We decided to look at 3 dimensions in the data: year, victim's age and number of victims. We grouped the data about number of victims by year and victim's age. More specifically,there are 11 age groups in total, which are -4, 5-9, 10-14, 15-17, 18-20, 21-24, 25-34, 35-44, 45-54, 55-64 and 65- .
+
+More information about the dataset could by found following [this link](https://www.stat.fi/til/rpk/2018/15/rpk_2018_15_2019-06-06_tie_001_en.html) or [this link](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/)
+
+```{r}
+data = read.csv("dataset.csv", header = TRUE, sep=";")
+data
+```
+
+We visuallize the number of victims per year for each age group 
+
+```{r}
+ageGroups <- unique(data$Victim.s.age)
+grouped_data <- c()
+
+group_count = 11
+
+plots <- lapply(
+  seq(1, group_count),
+  function(i) {
+    data_for_age_group <- filter(data, Victim.s.age == ageGroups[i])
+     ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
+      geom_point(size = 1)  + geom_line() +
+       labs(
+         title=paste0("Reported cases. Victim's age: ", ageGroups[i]),
+         x ="Year",
+         y = "Number of victims"
+       )
+  }
+)
+
+grid.arrange(grobs = plots[1:6], ncol = 2)
+grid.arrange(grobs = plots[7:11], ncol = 2)
+```
+
+We reformat the data into matrix form so that it's easier to work with. Rows represent age groups in ascending order and columns represent years: 2009 to 2018.
+
+```{r}
+full_grouped_data <- sapply(
+  2009:2018,
+  function (j) sapply(
+    1:11,
+    function (i) filter(
+      data,
+      Victim.s.age == ageGroups[i] & Year == j
+    )$Number.of.victims
+  )
+)
+full_grouped_data
+```
+
+# Analysis problem
+
+Having a model that fits the time-series data as well as being able to predict the numbers for upcoming years is of great importance for academic research. Besides, it can have various applications when trying to solve the problem of domestic violence on societal level.
+
+The end purpose of the analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. In order to do this, we decided to start with 2 similar models, which even if do not fit the data well enough, will act as a starting point for the future research. More specifically, we decided to select the separate and hierachial autoregressive models and compare their predictive performances based on ELPD values. Finally, in addition to purely numerical analysis, we need to perform a sort of posterior predictive checking that would act as a saninty check and allow us to see if the models are at least somewhat accurate or if we need to come up with something better.
+
+# Models
+
+The dataset features data points with timestamps so it seemed to us that the first thing we should do is to try a time-series model. We decided to use Autoregressive model, which is one of the most commonly used time-series models. Since the dataset only contains data for 10 years, we decided to use the first-order autoregressive model AR(1).
+
+*There are 2 models analyzed in this notebook:*
+
+*1. Heirarchical AR(1) model*
+
+*2. Separate AR(1) model*
+
+To model the number of victims per year, we used Poisson distribution which is commonly used for modeling the number of times an event occurs in an interval of time. This way, the number of victim in year $y_n$ of each age group will be propotional to the following distribution:
+
+$$
+y_n \sim poisson(\alpha + \beta \space y_{n-1})
+$$
+Where $\alpha$ and $\beta$ are parameters of the model.
+
+## Model 1
+
+The first model is a hierachial AR(1) model. We decided to use Poisson distribution to model number of domestic violence cases reported since it is a distribution commonly used for modelling the probability of a given number of events occurring in a fixed interval of time or space if these events occur with a known constant mean rate and independently of the time since the last event (see https://en.wikipedia.org/wiki/Poisson_distribution). Moreover, we decided to use normal distribution for $\alpha$ and $\beta,$ and normal and cauchy for hierarchical parameters. The reason for the latter choice is for the lack of a reason to use any other distributions and because those are commonly used as "default" choices. for modelling mean and standard deviation. Below are are the equations describing the model.
+
+
+$$
+y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
+$$
+
+$$
+\alpha_i \sim Normal(mu\_group_{\alpha}, tau_{\alpha})
+$$
+
+$$
+\beta_i \sim Normal(mu\_group_{\beta}, tau_{\beta})
+$$
+
+Below are the priors for the hierarchical parameters
+
+$$
+mu\_group_{\alpha} \sim Normal(0, mu\_group\_prior\_SD_{\alpha})
+$$
+
+$$
+mu\_group_{\beta} \sim Normal(0, mu\_group\_prior\_SD_{\beta})
+$$
+
+$$
+tau_{\alpha} \sim Cauchy(0, tau\_prior\_SD_{\alpha})
+$$
+
+$$
+tau_{\beta} \sim Cauchy(0, tau\_prior\_SD_{\beta})
+$$
+
+Where $i$ stands for the index of the $i$'th age group.
+
+
+Since we don't have much data and the inter group variation is high, we decided to used the non-centered parameterization approach for the hierachial model. See the following sources for more information about the approach and example cases ( https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html,  https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html )
+
+
+```{stan, output.var="stan_model_ar_hierarchical"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  int<lower=0> y[N];
+  int<lower=0> y0[K];
+  real<lower=0> mu_group_alpha_prior_sd;
+  real<lower=0> mu_group_beta_prior_sd;
+  real<lower=0> tau_alpha_prior_sd;
+  real<lower=0> tau_beta_prior_sd;
+  int<lower=0, upper=1> use_lfo_cv;
+}
+parameters {
+  real mu_group_alpha;
+  real<lower=0> mu_group_beta;
+  real<lower=0> tau_alpha; // hierarchical std
+  real<lower=0> tau_beta; // hierarchical std
+  vector[K] alpha_tilde;
+  real<lower=0> beta_tilde[K];
+}
+transformed parameters {
+  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
+  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
+  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
+  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
+  
+  real alpha[K];
+  real beta[K];
+  
+  for (i in 1:K) {
+    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
+    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
+  }
+  
+  for (n in 1:K) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
+  }
+  
+  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  mu_group_alpha ~ normal(0, mu_group_alpha_prior_sd); // hierarchical prior for mean
+  mu_group_beta ~ normal(0, mu_group_beta_prior_sd); // hierarchical prior for mean
+  tau_alpha ~ cauchy(0, tau_alpha_prior_sd); // hierarchical prior for std
+  tau_beta ~ cauchy(0, tau_beta_prior_sd); // hierarchical prior for std
+  
+  alpha_tilde ~ normal(0, 1);
+  beta_tilde ~ normal(0, 1);
+  
+  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
+     y[n] ~ poisson(mu[n]);
+  }
+}
+generated quantities {
+  vector[N] log_lik;
+  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
+  vector[use_lfo_cv ? 0 : N] y_rep;
+  
+  if (use_lfo_cv) {
+    for (n in 1:K) {
+      mu_pred[n] = alpha[n] + beta[n] * y[(N - K) - K + n];
+    }
+    
+    for (i in 1:(N - K)) {
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+    
+    for (i in 1:K) {
+      log_lik[(N - K) + i] = poisson_lpmf(y[(N - K) + i] | mu_pred[i]);
+    }
+  } else {
+    for (i in 1:N) {
+      y_rep[i] = poisson_rng(mu[i]);
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+  }
+}
+```
+
+### Prior predictive checking
+
+First, we do prior predictive checking in order to identify a sensible prior to start with bassed on the general knowledge about the Finnish population. We believe that a major part of the mass should lie between 0 and 10000 or at least between 0 and 100000 since the population of Finland is only around 5.2 millions and based on the figured observed from previous studies (e.g. see https://www.stat.fi/til/rpk/2017/15/rpk_2017_15_2018-05-31_tie_001_en.html). In particular, we try to select a prior s.t. probability mass of having more than 1 million (one fifth'th of finnish population) cases reported is extremely small or zero.
+
+
+```{r}
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 20000,
+  mu_group_beta_sd = 20,
+  tau_alpha_sd = 5000,
+  tau_beta_sd = 20
+)
+```
+
+Roughtly 86.4% of the mass is greater than 10,000. Moreover, a significant part of the mass is for numbers beyond 100000, which seems a little too wide.
+
+```{r}
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 20000,
+  mu_group_beta_sd = 5,
+  tau_alpha_sd = 1000,
+  tau_beta_sd = 2
+)
+```
+
+Around 70% of the mass is greater than 10,000.
+
+```{r}
+check_prior_hierarchical(
+  full_grouped_data,
+  mu_group_alpha_sd = 10000,
+  mu_group_beta_sd = 2,
+  tau_alpha_sd = 2000,
+  tau_beta_sd = 2
+)
+```
+
+The latter prior seems to be the most reasonable one. About 50% of the mass lies between 0 and 10000. About 5% of the mass is with values greater than 100000.
+
+The latter prior is wide enough and reasonably constrained at the same time, so we decided to start with it and experiment more later on (see prior sensitivity analysis section).
+
+### Model diagnostics
+
+Fitting the model using the prior that was concluded to be reasonable in the previous section i.e. 
+
+$$
+mu\_group_{\alpha} \sim Normal(0, 10000)
+$$
+
+$$
+mu\_group_{\beta} \sim Normal(0, 2)
+$$
+
+$$
+tau_{\alpha} \sim Cauchy(0, 2000)
+$$
+
+$$
+tau_{\beta} \sim Cauchy(0, 2)
+$$
+
+*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the appendix section)*
+
+```{r}
+fit_hierarchical <- fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 2,
+  tau_alpha_prior_sd = 2000,
+  tau_beta_prior_sd = 2
+)
+print(fit_hierarchical)
+```
+
+#### Effective sample size (ESS) diagnostics
+
+According to BDA3 Chapter 11.5, it is generally sufficient to have 10 times the number of chains for effective sample sizes to obtain a reasonable precision from the simulation. Since we're using 7 chains (as can be seen from the output above), we need to make sure that there are at least 7 * 10 = 70 effective sample sizes for each of the parameters.
+
+As can be seen, all parameters have $\hat n_{eff}$ greater than *3650*, which is clearly sufficient given the recommended value of 70.
+
+Besides, according to https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "When $n_{eff} / n_{transitions} < 0.001$ the estimators that we use are often biased and can significantly overestimate the true effective sample size.". For our case, the lowest ratio is 3650 / 21000 = 0.174 when taking all post-warmup draws as $n_{transitions}$.
+
+Thus, we can consider our simulation precise enough based on the $\hat n_{eff}$ values.
+
+#### R hat diagnostics
+
+The below interpretation is partially based on the information given in BDA3 chapter 11 and on RStan
+documentation (see https://rdrr.io/cran/rstan/man/Rhat.html)
+
+$\hat R$ represents the potential scale reduction factor. $\hat R$ of the values provide convergence diagnostic for - in
+this case - 10 chains. It compares “within- and between- chain estimates for model parameters and other
+univariate quantities of interest”. If $\hat R$ is not near 1, we need either to coninue our simulations further or to
+change the algorithm to be more efficient. How close we want $\hat R$ to be to 1 depends on a problem at hand,
+but values smaller than 1.1 or even 1.01 to be safe are generally considered as acceptable
+
+As can be seen from the output above, $\hat R$ for all of the parameters is either 1 or very close to 1. In particular, the values are smaller than a recommended threshold of 1.1 (BDA3 Chapter 11.5).
+
+*We can conclude from this and the previously done ESS diagnostic* that the sequences converged well and we don't need to run the simulations further.
+
+#### HMC -specific convergence diagnostics
+
+The utility function below prints the number of iterations that sanurated the maximum tree depth (set to 15 in this case), and the number of iterations that ended with a divergence.
+
+The utility function uses the code from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R
+
+```{r}
+print_fit_diagnostic(fit_hierarchical, tree_depth = 10)
+print_fit_diagnostic(fit_hierarchical, tree_depth = 15)
+```
+
+Quoting from https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "The dynamic implementation of Hamiltonian Monte Carlo used in Stan has a maximum trajectory length built in to avoid infinite loops that can occur for non-identified models. For sufficiently complex models, however, Stan can saturate this threshold even if the model is identified, which limits the efficacy of the sampler."
+
+As can be seen from the output above, some iterations saturated the tree depth of 10. However, as can be noticed the fitting was run with maximum tree depth of 15. With tree-depth set to 15, there are 0 saturations.
+
+Thus, we can conclude that having max. tree depth set to 15, allows NUTS to not be terminated prematurely and thus the efficientcy of our sampling algorithm is not being restricted.
+
+Besides, we can see that only 2 iterations ended with divergence in the fitting above, which can be safely neglected. Divergences in a simulation might be a indicator of pathological neighbourhoodsof the posterior that the simulated Hamiltonian trajectories are not able to explore sufficiently well (see https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html). 
+
+We thus can conclude that there are no apparent issues with divergences which means that the simulation was able to explore all the important parts of the posterior sufficiently well.
+
+#### PSIS-LOO and LFO
+
+In order to evaluate the model's predictive performance, which is one of the things that matters the most according to the analysis problem section, we're running PSIS-LOO analysis of the model in the code snippet below.
+
+Notice that we've decided to leave first 3 fitted values out of the analysis. Because the model is not fit for the first data point at all (see model description section for details), we thus doing PSIS-LOO only for 5 - 10 datapoints of each age group.
+
+If loo() function is run on the entire dataset without oimtting first several value, $\hat k$ values for those first datapoints tend to be very bad (most of them > 1.0). Besides, the similar technique was used in http://mc-stan.org/loo/articles/loo2-lfo.html. One justification for this could be that we need to have some histoical observations first (at least 4 in our case) to make a decent prediction for the next value.
+
+```{r}
+loo_hierarchical <- get_loo_diagnostics(fit_hierarchical)
+print(loo_hierarchical)
+plot(loo_hierarchical)
+```
+
+We can see from the print out above that $\hat k$ values for some of the datapoints are above 0.7. Becasause of this and because PSIS-LOO uses data from the future datapoints, we cannot fully rely on ELPD shown above (the result might be overoptimistic). For these reasons, we'll do a true (as opposed to PSIS approximation) leave-future-out corss validation. The code used in the function below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html.
+
+```{r}
+exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 10000,
+  mu_group_beta_prior_sd = 2,
+  tau_alpha_prior_sd = 2000,
+  tau_beta_prior_sd = 2
+)
+rbind_print(
+  "LFO" = exact_elpd_hierarchical
+)
+```
+
+Thus, this value can be used later when comparing the models in terms of their predictive performance.
+
+### Graphical posterior predictive checking
+
+Below are the plots of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" plots.
+
+```{r}
+plot_ppc_ribbons(fit_hierarchical, full_grouped_data)
+```
+
+We can see from the plots that the draws from the model do not overlap with the actual data in many cases. Moreover, it seems that the model is way too confident with most of the groups resulting in way too narrow "ribbons" in plots above that do not match with the data.
+
+It can also be observed that in many cases predictions for point $y$ are closer to the true value of $y-1$ than to the true value of $y$. This can be explained by the constraints of the selected model (AR(1)) where a predicted value of $y$ highly depends on the true value of the (chronologically) previous datapoint.
+
+To demonstrate further that the model appears to be too confident, we plot the same data (only some age groups, the rest were omitted for brevity) using "ppc_intervals" function (see below).
+
+```{r}
+plot_ppc_intervals(fit_hierarchical, full_grouped_data)
+```
+
+Finally, in order to demonstrate further how correct (or incorrect) the model is, the error scatter plot is plotted below demonstrating average errors (of y_rep when compared to the actual data) for each datapoint in each age group.
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
+```
+
+We can see that for most of the datapoinst, the average error is below 150. Moreover, approximately the same number of data points have negative error as the number of datapoints that have positive average error. It also can be noted that there is moer variation in values of average error for datapoints whose true value is above 1000 with extreme cases being -350 and just under 500.
+
+*From everything discussed above in the section, we can conclude that* the model is quite poor in terms of how it fits the data. From the simple visualizaions shown above, we can assume that some of the reasons for this are:
+
+1. Uncertainty intervals are not wide enough
+2. The fact that data depends mainly on the previous observation only (because of AR(1)), since data changes quite a bit on some occasions for the year $y$ compared to the year $y-1$.
+
+### Prior sensitivity analysis
+
+In this section we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
+
+First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline. (the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
+```{r}
+fit_hierarchical_wide_prior = fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 100000,
+  mu_group_beta_prior_sd = 25,
+  tau_alpha_prior_sd = 10000,
+  tau_beta_prior_sd = 25
+) # wider prior
+print(fit_hierarchical_wide_prior)
+```
+
+Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
+
+```{r}
+print_fit_diagnostic(fit_hierarchical_wide_prior, tree_depth = 15)
+```
+
+No iterations saturated the maximum tree depth of 15 and there were only 5 divergences out of 21000, which is good enough for us to proceed with the model.
+
+```{r}
+loo_hierarchical_wide_prior <- get_loo_diagnostics(fit_hierarchical_wide_prior)
+print(loo_hierarchical_wide_prior)
+plot(loo_hierarchical_wide_prior)
+```
+
+PSIS-LOO analysis looks similar to the baseline case, where $\hat k$ values for some datapoinst exceeded 0.7. Also estimated ELPD_LOO value is very close to the baseline one.
+
+```{r}
+plot_ppc_ribbons(fit_hierarchical_wide_prior, full_grouped_data)
+```
+
+```{r}
+plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
+```
+
+Both ribbons and intervals visualizations look very similar to the baseline case.
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
+```{r}
+exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 100000,
+  mu_group_beta_prior_sd = 25,
+  tau_alpha_prior_sd = 10000,
+  tau_beta_prior_sd = 25
+)
+rbind_print(
+  "LFO" = exact_elpd_hierarchical_wide_prior
+)
+```
+
+ELPD_LFO value is almost exaclty the same as in out baseline case (which was -581.87). So we can conclude that *there is almost no or very little difference between the models in terms of their predictive performance.*
+
+
+*Now let's try a stronger more narrow prior*
+
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
+```{r}
+fit_hierarchical_narrow_prior = fit_hierarchical_model(
+  mu_group_alpha_prior_sd = 2000,
+  mu_group_beta_prior_sd = 0.5,
+  tau_alpha_prior_sd = 10,
+  tau_beta_prior_sd = 0.1
+)
+print(fit_hierarchical_narrow_prior)
+```
+
+Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
+
+```{r}
+print_fit_diagnostic(fit_hierarchical_narrow_prior, tree_depth = 15)
+```
+
+No tree depth saturations and 0 divergences, which is even better compared to the previous cases where we did have a negligible number of divergences.
+
+```{r}
+loo_hierarchical_narrow_prior <- get_loo_diagnostics(fit_hierarchical_narrow_prior)
+print(loo_hierarchical_narrow_prior)
+plot(loo_hierarchical_narrow_prior)
+```
+
+PSIS-LOO results look similar to the previous cases, with estimates for ELPD value just slightly worse in the case of the narrow prior.
+
+```{r}
+plot_ppc_ribbons(fit_hierarchical_narrow_prior, full_grouped_data)
+```
+
+```{r}
+plot_ppc_intervals(fit_hierarchical_narrow_prior, full_grouped_data)
+```
+
+Similarly to the case of the wider prior, no noticable difference can be observed from the plots above compared to the other priors.
+
+```{r}
+exact_elpd_hierarchical_narrow_prior <- get_lfo_cv_results_hierarchical(
+  mu_group_alpha_prior_sd = 2000,
+  mu_group_beta_prior_sd = 0.5,
+  tau_alpha_prior_sd = 10,
+  tau_beta_prior_sd = 0.1
+)
+rbind_print(
+  "LFO" = exact_elpd_hierarchical_narrow_prior
+)
+```
+
+ELPD value calculated based on LFO analysis is very close to the other 2 reported before.
+
+The scatter plot below depicts average errors for different datapoints. X axis represents y - y_rep value, while Y axix represents a true value of the datapoint (hence y).
+
+```{r}
+y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
+y_rep_wide_prior <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
+y_rep_narrow_prior <- as.matrix(fit_hierarchical_narrow_prior, pars = "y_rep")
+plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
+plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
+plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
+
+plot(plot_wide_prior)
+plot(plot_baseline)
+plot(plot_narrow_prior)
+```
+
+Thus, based on the plots above and comparing ELDP values obtained using LFO-CV for each of the 3 different priors we can conclude that the model is not very sensitive to a reasonable changes in it's prior and is therefore can be considered as relatively robust and highly dependent on data.
+
+## Model 2
+
+This is the separate AR(1) model. In this model, we assume that there is no co-dependence between the age groups. As was explained previously (see Model 1 section), Poisson distribution was chosen since it is a common choice when modelling the number of events that occured over a period of time. Normal distribution was chosen for priors since we couldn't find any strong reason to use any other distribution (at least as the starting point) i.e. as the default choice. Below are some of the equations describing the separate model.
+
+$$
+y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
+$$
+
+Below are the priors
+
+$$
+\alpha_i \sim Normal(0, sigma_{\alpha})
+$$
+
+$$
+\beta_i \sim Normal(0, sigma_{\beta})
+$$
+
+
+```{stan, output.var="stan_model_ar_separate"}
+data {
+  int<lower=0> N;
+  int<lower=0> K; // number of groups
+  int<lower=1,upper=K> x[N]; // group indicator
+  int<lower=0> y[N];
+  int<lower=0> y0[K];
+  real<lower=0> alpha_prior_sd;
+  real<lower=0> beta_prior_sd;
+  int<lower=0, upper=1> use_lfo_cv;
+}
+parameters {
+  real alpha[K];
+  real<lower=0> beta[K];
+}
+transformed parameters {
+  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
+  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
+  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
+  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
+  
+  for (n in 1:K) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
+  }
+  
+  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
+    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
+  }
+}
+model {
+  for (n in 1:K) {
+    alpha[n] ~ normal(0, alpha_prior_sd); // prior
+    beta[n] ~ normal(0, beta_prior_sd);  // prior
+  }
+  
+  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
+     y[n] ~ poisson(mu[n]);
+  }
+}
+generated quantities {
+  vector[N] log_lik;
+  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
+  vector[use_lfo_cv ? 0 : N] y_rep;
+  
+  if (use_lfo_cv) {
+    for (n in 1:K) {
+      mu_pred[n] = alpha[n] + beta[n] * y[(N - (1 * K)) - K + n];
+    }
+    
+    for (i in 1:(N - (1 * K))) {
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+    
+    for (i in 1:K) {
+      log_lik[(N - (1 * K)) + i] = poisson_lpmf(y[(N - (1 * K)) + i] | mu_pred[i]);
+    }
+  } else {
+    for (i in 1:N) {
+      y_rep[i] = poisson_rng(mu[i]);
+      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
+    }
+  }
+}
+```
+
+
+### Prior predictive checking
+
+Similar to the previous model we first conduct prior predictive checking to come up with a sensible prior. The similar assumption as in Model 1 are used here to select our prior. Based on these, we decided to proceed with the first one because while being sufficiently wide, the data generated with it seemed sensible to us.
+
+```{r}
+check_prior_separate(
+  full_grouped_data,
+  alpha_prior_mean = 0,
+  alpha_prior_sd = 10000,
+  beta_prior_mean = 0,
+  beta_prior_sd = 2
+)
+```
+
+### Model diagnostics
+
+Fitting the model with the prior chosen above i.e.
+
+
+$$
+\alpha_i \sim Normal(0, 10000)
+$$
+
+$$
+\beta_i \sim Normal(0, 2)
+$$
+
+*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the appendix section)*
+
+```{r}
+fit_separate = fit_separate_model(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 2
+)
+print(fit_separate)
+```
+
+#### ESS and R hat diagnostics
+
+All of the $\hat R$ values look good and ESS values are all well above 10000, which is more than enough given that we only have 7 chains (7 * 10 = 70).
+
+(For more discussion, see Model 1 section).
+
+#### HMC -specific convergence diagnostics
+
+```{r}
+print_fit_diagnostic(fit_separate, tree_depth = 10)
+```
+
+HMC -specific convergence diagnostics looks good too.
+
+(For more discussion, see Model 1 section).
+
+#### PSIS-LOO and LFO
+
+```{r}
+loo_separate <- get_loo_diagnostics(fit_separate)
+print(loo_separate)
+plot(loo_separate)
+```
+
+The results of PSIS-LOO look very similar to those of model 1. In particular, the estimated ELPD value is equal to -509 which is very close to the value obtained for the hierarchical model (which was -509.7). Besides, similarly to the case of model 1, $\hat k$ values for some of the data points exceed the threshold of 0.7. For this reason, and because LOO-CV uses information of "future" datapoints, which is not appropriate in our case, we're doing complete leave-future-out cross validation using the dataset and the separate model.
+
+
+Below are the results of leave-one-future-out cross validation.
+
+```{r}
+exact_elpd_separate <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 2
+)
+rbind_print(
+  "LFO" = exact_elpd_separate
+)
+```
+
+The results are close to that of the first model but comperatively worse.  In particular, the ELPD value is at -592.5 as opposed to -582 (for the case of the 2nd model).
+
+### Graphical posterior predictive checking
+
+Below are the plots of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" and "intervals" plots.
+
+```{r}
+plot_ppc_ribbons(fit_separate, full_grouped_data)
+```
+
+```{r}
+plot_ppc_intervals(fit_separate, full_grouped_data)
+```
+
+The plots look very similar to those of the first model. Again, it can be seen that the model does not match the data in many cases, the interval is too narrow and in many cases the model is visibly a slightly modified lagged-by-1 version of the true data set. This again can be partly explained by constraints of AR(1), see " Graphical posterior predictive checking" subsection for model 1 for more discussion.
+
+```{r}
+y_rep <- as.matrix(fit_separate, pars = "y_rep")
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
+```
+
+The error scatter plot looks similar to that of the first model. The discussion and observations of model 1 apply to this case as well.
+
+### Prior sensitivity analysis
+
+In this section, once again, we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
+
+First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
+
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
+```{r}
+fit_separate_wide_prior = fit_separate_model(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 25
+)
+print(fit_separate_wide_prior)
+```
+
+ESS and $\hat R$ both look good
+
+```{r}
+print_fit_diagnostic(fit_separate_wide_prior, tree_depth = 10)
+```
+
+No tree depth saturations and only 2 divergences per 21000 iterations.
+
+```{r}
+loo_separate_wide_prior <- get_loo_diagnostics(fit_separate_wide_prior)
+print(loo_separate_wide_prior)
+plot(loo_separate_wide_prior)
+```
+
+PSIS-LOO -based ELPD estimation is almost the same as in the baseline case.
+
+
+```{r}
+plot_ppc_ribbons(fit_separate_wide_prior, full_grouped_data)
+```
+
+Graphically, no noticable differences can be observed from the posterior compared to the baseline case.
+
+```{r}
+exact_elpd_separate_wide_prior <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 10000,
+  beta_prior_sd = 25
+)
+rbind_print(
+  "LFO" = exact_elpd_separate_wide_prior
+)
+```
+
+Leave-one-future-out CV -based elpD value just slightly better than in the baseline case; -590 compared to -592.5.
+
+
+Now let's try a stronger more narrow prior
+
+(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
+
+```{r}
+fit_separate_narrow_prior = fit_separate_model(
+  alpha_prior_sd = 2000,
+  beta_prior_sd = 0.5
+)
+print(fit_separate_narrow_prior)
+```
+
+Similarly ESS and $\hat R$ are very good.
+
+```{r}
+print_fit_diagnostic(fit_separate_narrow_prior, tree_depth = 10)
+```
+
+Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifics convergence diagnostics looks good too.
+
+```{r}
+loo_separate_narrow_prior <- get_loo_diagnostics(fit_separate_narrow_prior)
+print(loo_separate_narrow_prior)
+plot(loo_separate_narrow_prior)
+```
+
+Same results as with the previously tried priors.
+
+```{r}
+exact_elpd_separate_narrow_prior <- get_lfo_cv_results_separate(
+  alpha_prior_sd = 2000,
+  beta_prior_sd = 0.5
+)
+rbind_print(
+  "LFO" = exact_elpd_separate_narrow_prior
+)
+```
+
+Rather surprisingly, the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously. (the calculations are based on LFO-CV)
+
+
+Finally, error scatter plots are shown below next to each other for better comparison.
+```{r}
+y_rep <- as.matrix(fit_separate, pars = "y_rep")
+y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
+y_rep_narrow_prior <- as.matrix(fit_separate_narrow_prior, pars = "y_rep")
+plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
+plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
+plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
+
+plot(plot_wide_prior)
+plot(plot_baseline)
+plot(plot_narrow_prior)
+```
+
+It can be seen, that the error pattern is almost exactly the same for all the priors with no or almost no noticable difference.
+
+We thus can conclude that the choice of sensible prior does not significantly affect the posterior, although it does have some effect since we saw slight improvement in ELPD when a stronger prior was tried.
+
+## Model comparison
+
+Here is a visual comparison for hierarchical and separate model respectively.
+The plots are the error scatter plots that were already demonstrated, explained and discussed in the previous sections.
+
+```{r}
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
+ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
+```
+
+As can be seen from the plots above and comparison table below, the difference between the 2 models is rather small one. Although, the hierarchical model had slightly better values for ELPD, we were able to obtain very close values with the separate model by using a slightly stringler prior.
+
+```{r}
+comparison_results = matrix(
+  c(
+    loo_hierarchical$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_hierarchical, # LFO-based elpd
+    loo_hierarchical_wide_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_hierarchical_wide_prior, # LFO-based elpd
+    loo_hierarchical_narrow_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_hierarchical_narrow_prior, # LFO-based elpd
+    loo_separate$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_separate, # LFO-based elpd
+    loo_separate_wide_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_separate_wide_prior, # LFO-based elpds
+    loo_separate_narrow_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
+    exact_elpd_separate_narrow_prior # LFO-based elpd
+  ),
+  ncol = 6,
+  dimnames = list(
+    c("elpd_loo", "p_loo", "elpd_lfo"),
+    c("hierarchical",
+      "hier. (wide prior)",
+      "hier. (narrow prior)",
+      "sep.",
+      "sep. (wide prior)",
+      "sep. (narrow prior)")
+  )
+)
+```
+
+```{r echo = FALSE, results = 'asis'}
+library(knitr)
+kable(comparison_results, digits = 1)
+```
+
+Thus, using all the information obtained during the analysis reported in this notebook, we can conclude autoregressive model of 1st order is not a good fit for the data at hand. Graphical posterior predictive checking demonstrated poor fit of both models to the data. For more discussion on the identified problems and potential future improvements, see the next section.
+
+Moreover, we observed little difference between separate and hierarchical model even though the initial choice of priors could lead us to believe that the hierarchical model performed slightly better (this can be once again observed from the table shown above). 
+
+# Problems encountered and potential improvements
+
+This section discusses some of the identified problems and proposes some of the improvements that could serve as the next steps in analysing the dataset at hand.
+
+1. The confidence interval seems to be too narrow. This seems to be primarily caused by inability to specify thinkness of the tails in Poisson distribution that was used in both models. One idea for future improvements would be then to try a negative binomial distribution instead. Negative binomial distribution is similar to Poisson but can have much thinker tails if appropriate parameters are used (see https://en.wikipedia.org/wiki/Negative_binomial_distribution). Another idea is to use truncated normal distribution (see https://en.wikipedia.org/wiki/Truncated_normal_distribution), by having its lower bound equal to 0.
+
+2. As noted previously, it can be seen from the graphical posterior predictive checking that the model looks similar to the original data but lagged by one year. This can be a consequence of the fact that we were using AR(1) model. As one idea for potential improvement, autoregressive models with higher orders e.g. 2, 3 or 4 could be tried. In addition, other common time-series models such as Moving Average MA or Autoregressive Moving Average ARMA could be tried.
+
+3. Perhaps, one issue was that the factor based on which separation into groups has been done (age of the victim) is a poor choice. Perhaps, some other factor should be chosen as a basis for grouping the data. On the other hand, pooled model, where all the data is analyzed together could be a better option as well.
+
+4. Another problem was the fact that we only had 10 years of history data available. Perhaps, if we could get access to earlier history data, fitting a time-series model would be easier (for a variaty of reasons). One thing that more history data would make easier is using AR, MA or ARMA models with greater order e.g. AR(5), MA(4), etc. 
+
+5. The nature of the data itself as well as the way it is collected can also often be an issue. In this case, the numbers represent the amount of reported domestic violence cases. Such data can be highly volatile due to e.g. the fact that more or less people happen to report in a certain year. Perhaps, if estimates of actual violence cases would be used, fitting a model would be easier.
+
+6. Another problem envountered was that conductig LFO-CV was way too slow. One option for improvement would be to use an approximation for it that was demonstrated in http://mc-stan.org/loo/articles/loo2-lfo.html.
+
+# Conclusion
+
+In the report, we tried to fit 2 different autoregressive models to the data at hand and analysed the results. The data (the number of domestic violence cases reported from 2009 to 2018) was partitioned into 11 groups by the age of the victim. After conducting a thorough analysis of the models, we came to a conclusion that both models fit the data quite poorly. Besides, according to the results obtained, there was little difference in predictive performance between the hierarchical and separate models. Thus, none of the models can be reliably used for predicting the number of reported cases in the future. Several specific issues encountered were documented and some of the idea about future improvements proposed in the previous section.
+
+
+# Appendix
 
 The following functions are used throughout the whole notebook. Since most of the logic needs to be used multiple times, we decided to extract the "messy" parts in their own functions so that notebook as a whole is more readable and a reader can concentrate on *what* is going on, not *how* it is done.
 
@@ -457,890 +1759,3 @@ plot_ppc_intervals <- function(fit, true_data) {
   plots 
 }
 ```
-
-
-# Introduction
-
-Finland is often praised for its achievements in overall safety and very low crime rates, yet the [report](https://yle.fi/uutiset/osasto/news/article10531775.ece) by Finnish National Institute for Health and Welfare indicated that 130,000 people were victims of domestic violence in 2017. Moreover, according to this [source](https://yle.fi/uutiset/osasto/news/finland_is_eus_second_most_violent_country_for_women/7120601), Finland was EU’s second most violent country for women in 2014. Taken by surprise by this information, we decided to look more into the issue. Eventually, it seemed like a great idea to us to use the dataset described below as a basis for the project to understand the issue ourselves and to raise awareness among other students. In this notebook, we study the number of domestic violence cases per year grouped by victims' age categories.
-
-The rest of the notebook is structured as following. First, the dataset is described in more details and the analysis problem is stated. Then the 2 models are presented. For each of the models, we conduct prior predictive checking, convergence diagnostics, posterior predictive checking and evaluate their predictive performance based on ELPD values obtained by approximation using PSIS-LOO as well as using leave-one-future-out cross-validation to obtain a more reliable value for ELPD. Besides, prior sensitivity analysis is done for each of the models. Then, the models are compared based on the ELPD values, which is followed by a short related discussion. Finally, encountered problems are discussed and potential future improvements are proposed. We finish the report by drawing several conclusions.
-
-# Data description
-
-The dataset was obtained from Tilastokeskus [Statistic Finland](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/) and contains data about the number cases of domestic violence and intimate partner violence reported as offence.
-
-We decided to look at 3 dimensions in the data: year, victim's age and number of victims. We grouped the data about number of victims by year and victim's age. More specifically,there are 11 age groups in total, which are -4, 5-9, 10-14, 15-17, 18-20, 21-24, 25-34, 35-44, 45-54, 55-64 and 65- .
-
-More information about the dataset could by found following [this link](https://www.stat.fi/til/rpk/2018/15/rpk_2018_15_2019-06-06_tie_001_en.html) or [this link](http://pxnet2.stat.fi/PXWeb/pxweb/en/StatFin/StatFin__oik__rpk__uhri/statfin_rpk_pxt_11ch.px/)
-
-```{r}
-data = read.csv("dataset.csv", header = TRUE, sep=";")
-data
-```
-
-We visuallize the number of victims per year for each age group 
-
-```{r}
-ageGroups <- unique(data$Victim.s.age)
-grouped_data <- c()
-
-group_count = 11
-
-plots <- lapply(
-  seq(1, group_count),
-  function(i) {
-    data_for_age_group <- filter(data, Victim.s.age == ageGroups[i])
-     ggplot(aes(Year, Number.of.victims), data = data_for_age_group) +
-      geom_point(size = 1)  + geom_line() +
-       labs(
-         title=paste0("Reported cases. Victim's age: ", ageGroups[i]),
-         x ="Year",
-         y = "Number of victims"
-       )
-  }
-)
-
-grid.arrange(grobs = plots[1:6], ncol = 2)
-grid.arrange(grobs = plots[7:11], ncol = 2)
-```
-
-We reformat the data into matrix form so that it's easier to work with. Rows represent age groups in ascending order and columns represent years: 2009 to 2018.
-
-```{r}
-full_grouped_data <- sapply(
-  2009:2018,
-  function (j) sapply(
-    1:11,
-    function (i) filter(
-      data,
-      Victim.s.age == ageGroups[i] & Year == j
-    )$Number.of.victims
-  )
-)
-full_grouped_data
-```
-
-# Analysis problem
-
-Having a model that fits the time-series data as well as being able to predict the numbers for upcoming years is of great importance for academic research. Besides, it can have various applications when trying to solve the problem of domestic violence on societal level.
-
-The end purpose of the analysis is to build a model that's capable of predicting the number of domestic violence victims for each age group in the future. In order to do this, we decided to start with 2 similar models, which even if do not fit the data well enough, will act as a starting point for the future research. More specifically, we decided to select the separate and hierachial autoregressive models and compare their predictive performances based on ELPD values. Finally, in addition to purely numerical analysis, we need to perform a sort of posterior predictive checking that would act as a saninty check and allow us to see if the models are at least somewhat accurate or if we need to come up with something better.
-
-# Models
-
-The dataset features data points with timestamps so it seemed to us that the first thing we should do is to try a time-series model. We decided to use Autoregressive model, which is one of the most commonly used time-series models. Since the dataset only contains data for 10 years, we decided to use the first-order autoregressive model AR(1).
-
-*There are 2 models analyzed in this notebook:*
-
-*1. Heirarchical AR(1) model*
-
-*2. Separate AR(1) model*
-
-To model the number of victims per year, we used Poisson distribution which is commonly used for modeling the number of times an event occurs in an interval of time. This way, the number of victim in year $y_n$ of each age group will be propotional to the following distribution:
-
-$$
-y_n \sim poisson(\alpha + \beta \space y_{n-1})
-$$
-Where $\alpha$ and $\beta$ are parameters of the model.
-
-## Model 1
-
-The first model is a hierachial AR(1) model. We decided to use Poisson distribution to model number of domestic violence cases reported since it is a distribution commonly used for modelling the probability of a given number of events occurring in a fixed interval of time or space if these events occur with a known constant mean rate and independently of the time since the last event (see https://en.wikipedia.org/wiki/Poisson_distribution). Moreover, we decided to use normal distribution for $\alpha$ and $\beta,$ and normal and cauchy for hierarchical parameters. The reason for the latter choice is for the lack of a reason to use any other distributions and because those are commonly used as "default" choices. for modelling mean and standard deviation. Below are are the equations describing the model.
-
-
-$$
-y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
-$$
-
-$$
-\alpha_i \sim Normal(mu\_group_{\alpha}, tau_{\alpha})
-$$
-
-$$
-\beta_i \sim Normal(mu\_group_{\beta}, tau_{\beta})
-$$
-
-Below are the priors for the hierarchical parameters
-
-$$
-mu\_group_{\alpha} \sim Normal(0, mu\_group\_prior\_SD_{\alpha})
-$$
-
-$$
-mu\_group_{\beta} \sim Normal(0, mu\_group\_prior\_SD_{\beta})
-$$
-
-$$
-tau_{\alpha} \sim Cauchy(0, tau\_prior\_SD_{\alpha})
-$$
-
-$$
-tau_{\beta} \sim Cauchy(0, tau\_prior\_SD_{\beta})
-$$
-
-Where $i$ stands for the index of the $i$'th age group.
-
-
-Since we don't have much data and the inter group variation is high, we decided to used the non-centered parameterization approach for the hierachial model. See the following sources for more information about the approach and example cases ( https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html,  https://mc-stan.org/docs/2_18/stan-users-guide/reparameterization-section.html )
-
-
-```{stan, output.var="stan_model_ar_hierarchical"}
-data {
-  int<lower=0> N;
-  int<lower=0> K; // number of groups
-  int<lower=1,upper=K> x[N]; // group indicator
-  int<lower=0> y[N];
-  int<lower=0> y0[K];
-  real<lower=0> mu_group_alpha_prior_sd;
-  real<lower=0> mu_group_beta_prior_sd;
-  real<lower=0> tau_alpha_prior_sd;
-  real<lower=0> tau_beta_prior_sd;
-  int<lower=0, upper=1> use_lfo_cv;
-}
-parameters {
-  real mu_group_alpha;
-  real<lower=0> mu_group_beta;
-  real<lower=0> tau_alpha; // hierarchical std
-  real<lower=0> tau_beta; // hierarchical std
-  vector[K] alpha_tilde;
-  real<lower=0> beta_tilde[K];
-}
-transformed parameters {
-  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
-  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
-  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
-  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
-  
-  real alpha[K];
-  real beta[K];
-  
-  for (i in 1:K) {
-    alpha[i] = mu_group_alpha + tau_alpha * alpha_tilde[i];
-    beta[i] = mu_group_beta + tau_beta * beta_tilde[i];
-  }
-  
-  for (n in 1:K) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
-  }
-  
-  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
-  }
-}
-model {
-  mu_group_alpha ~ normal(0, mu_group_alpha_prior_sd); // hierarchical prior for mean
-  mu_group_beta ~ normal(0, mu_group_beta_prior_sd); // hierarchical prior for mean
-  tau_alpha ~ cauchy(0, tau_alpha_prior_sd); // hierarchical prior for std
-  tau_beta ~ cauchy(0, tau_beta_prior_sd); // hierarchical prior for std
-  
-  alpha_tilde ~ normal(0, 1);
-  beta_tilde ~ normal(0, 1);
-  
-  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
-     y[n] ~ poisson(mu[n]);
-  }
-}
-generated quantities {
-  vector[N] log_lik;
-  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
-  vector[use_lfo_cv ? 0 : N] y_rep;
-  
-  if (use_lfo_cv) {
-    for (n in 1:K) {
-      mu_pred[n] = alpha[n] + beta[n] * y[(N - K) - K + n];
-    }
-    
-    for (i in 1:(N - K)) {
-      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
-    }
-    
-    for (i in 1:K) {
-      log_lik[(N - K) + i] = poisson_lpmf(y[(N - K) + i] | mu_pred[i]);
-    }
-  } else {
-    for (i in 1:N) {
-      y_rep[i] = poisson_rng(mu[i]);
-      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
-    }
-  }
-}
-```
-
-### Prior predictive checking
-
-First, we do prior predictive checking in order to identify a sensible prior to start with bassed on the general knowledge about the Finnish population. We believe that a major part of the mass should lie between 0 and 10000 or at least between 0 and 100000 since the population of Finland is only around 5.2 millions and based on the figured observed from previous studies (e.g. see https://www.stat.fi/til/rpk/2017/15/rpk_2017_15_2018-05-31_tie_001_en.html). In particular, we try to select a prior s.t. probability mass of having more than 1 million (one fifth'th of finnish population) cases reported is extremely small or zero.
-
-
-```{r}
-check_prior_hierarchical(
-  full_grouped_data,
-  mu_group_alpha_sd = 20000,
-  mu_group_beta_sd = 20,
-  tau_alpha_sd = 5000,
-  tau_beta_sd = 20
-)
-```
-
-Roughtly 86.4% of the mass is greater than 10,000. Moreover, a significant part of the mass is for numbers beyond 100000, which seems a little too wide.
-
-```{r}
-check_prior_hierarchical(
-  full_grouped_data,
-  mu_group_alpha_sd = 20000,
-  mu_group_beta_sd = 5,
-  tau_alpha_sd = 1000,
-  tau_beta_sd = 2
-)
-```
-
-Around 70% of the mass is greater than 10,000.
-
-```{r}
-check_prior_hierarchical(
-  full_grouped_data,
-  mu_group_alpha_sd = 10000,
-  mu_group_beta_sd = 2,
-  tau_alpha_sd = 2000,
-  tau_beta_sd = 2
-)
-```
-
-The latter prior seems to be the most reasonable one. About 50% of the mass lies between 0 and 10000. About 5% of the mass is with values greater than 100000.
-
-The latter prior is wide enough and reasonably constrained at the same time, so we decided to start with it and experiment more later on (see prior sensitivity analysis section).
-
-### Model diagnostics
-
-Fitting the model using the prior that was concluded to be reasonable in the previous section i.e. 
-
-$$
-mu\_group_{\alpha} \sim Normal(0, 10000)
-$$
-
-$$
-mu\_group_{\beta} \sim Normal(0, 2)
-$$
-
-$$
-tau_{\alpha} \sim Cauchy(0, 2000)
-$$
-
-$$
-tau_{\beta} \sim Cauchy(0, 2)
-$$
-
-*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below*
-
-```{r}
-fit_hierarchical <- fit_hierarchical_model(
-  mu_group_alpha_prior_sd = 10000,
-  mu_group_beta_prior_sd = 2,
-  tau_alpha_prior_sd = 2000,
-  tau_beta_prior_sd = 2
-)
-print(fit_hierarchical)
-```
-
-#### Effective sample size (ESS) diagnostics
-
-According to BDA3 Chapter 11.5, it is generally sufficient to have 10 times the number of chains for effective sample sizes to obtain a reasonable precision from the simulation. Since we're using 7 chains (as can be seen from the output above), we need to make sure that there are at least 7 * 10 = 70 effective sample sizes for each of the parameters.
-
-As can be seen, all parameters have $\hat n_{eff}$ greater than *3650*, which is clearly sufficient given the recommended value of 70.
-
-Besides, according to https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "When $n_{eff} / n_{transitions} < 0.001$ the estimators that we use are often biased and can significantly overestimate the true effective sample size.". For our case, the lowest ratio is 3650 / 21000 = 0.174 when taking all post-warmup draws as $n_{transitions}$.
-
-Thus, we can consider our simulation precise enough based on the $\hat n_{eff}$ values.
-
-#### R hat diagnostics
-
-The below interpretation is partially based on the information given in BDA3 chapter 11 and on RStan
-documentation (see https://rdrr.io/cran/rstan/man/Rhat.html)
-
-$\hat R$ represents the potential scale reduction factor. $\hat R$ of the values provide convergence diagnostic for - in
-this case - 10 chains. It compares “within- and between- chain estimates for model parameters and other
-univariate quantities of interest”. If $\hat R$ is not near 1, we need either to coninue our simulations further or to
-change the algorithm to be more efficient. How close we want $\hat R$ to be to 1 depends on a problem at hand,
-but values smaller than 1.1 or even 1.01 to be safe are generally considered as acceptable
-
-As can be seen from the output above, $\hat R$ for all of the parameters is either 1 or very close to 1. In particular, the values are smaller than a recommended threshold of 1.1 (BDA3 Chapter 11.5).
-
-*We can conclude from this and the previously done ESS diagnostic* that the sequences converged well and we don't need to run the simulations further.
-
-#### HMC -specific convergence diagnostics
-
-The utility function below prints the number of iterations that sanurated the maximum tree depth (set to 15 in this case), and the number of iterations that ended with a divergence.
-
-The utility function uses the code from https://github.com/avehtari/BDA_R_demos/blob/master/demos_rstan/stan_utility.R
-
-```{r}
-print_fit_diagnostic(fit_hierarchical, tree_depth = 10)
-print_fit_diagnostic(fit_hierarchical, tree_depth = 15)
-```
-
-Quoting from https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html, "The dynamic implementation of Hamiltonian Monte Carlo used in Stan has a maximum trajectory length built in to avoid infinite loops that can occur for non-identified models. For sufficiently complex models, however, Stan can saturate this threshold even if the model is identified, which limits the efficacy of the sampler."
-
-As can be seen from the output above, some iterations saturated the tree depth of 10. However, as can be noticed the fitting was run with maximum tree depth of 15. With tree-depth set to 15, there are 0 saturations.
-
-Thus, we can conclude that having max. tree depth set to 15, allows NUTS to not be terminated prematurely and thus the efficientcy of our sampling algorithm is not being restricted.
-
-Besides, we can see that only 2 iterations ended with divergence in the fitting above, which can be safely neglected. Divergences in a simulation might be a indicator of pathological neighbourhoodsof the posterior that the simulated Hamiltonian trajectories are not able to explore sufficiently well (see https://mc-stan.org/users/documentation/case-studies/rstan_workflow.html). 
-
-We thus can conclude that there are no apparent issues with divergences which means that the simulation was able to explore all the important parts of the posterior sufficiently well.
-
-#### PSIS-LOO and LFO
-
-In order to evaluate the model's predictive performance, which is one of the things that matters the most according to the analysis problem section, we're running PSIS-LOO analysis of the model in the code snippet below.
-
-Notice that we've decided to leave first 3 fitted values out of the analysis. Because the model is not fit for the first data point at all (see model description section for details), we thus doing PSIS-LOO only for 5 - 10 datapoints of each age group.
-
-If loo() function is run on the entire dataset without oimtting first several value, $\hat k$ values for those first datapoints tend to be very bad (most of them > 1.0). Besides, the similar technique was used in http://mc-stan.org/loo/articles/loo2-lfo.html. One justification for this could be that we need to have some histoical observations first (at least 4 in our case) to make a decent prediction for the next value.
-
-```{r}
-loo_hierarchical <- get_loo_diagnostics(fit_hierarchical)
-print(loo_hierarchical)
-plot(loo_hierarchical)
-```
-
-We can see from the print out above that $\hat k$ values for some of the datapoints are above 0.7. Becasause of this and because PSIS-LOO uses data from the future datapoints, we cannot fully rely on ELPD shown above (the result might be overoptimistic). For these reasons, we'll do a true (as opposed to PSIS approximation) leave-future-out corss validation. The code used in the function below is adapted from http://mc-stan.org/loo/articles/loo2-lfo.html.
-
-```{r}
-exact_elpd_hierarchical <- get_lfo_cv_results_hierarchical(
-  mu_group_alpha_prior_sd = 10000,
-  mu_group_beta_prior_sd = 2,
-  tau_alpha_prior_sd = 2000,
-  tau_beta_prior_sd = 2
-)
-rbind_print(
-  "LFO" = exact_elpd_hierarchical
-)
-```
-
-Thus, this value can be used later when comparing the models in terms of their predictive performance.
-
-### Graphical posterior predictive checking
-
-Below are the plots of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" plots.
-
-```{r}
-plot_ppc_ribbons(fit_hierarchical, full_grouped_data)
-```
-
-We can see from the plots that the draws from the model do not overlap with the actual data in many cases. Moreover, it seems that the model is way too confident with most of the groups resulting in way too narrow "ribbons" in plots above that do not match with the data.
-
-It can also be observed that in many cases predictions for point $y$ are closer to the true value of $y-1$ than to the true value of $y$. This can be explained by the constraints of the selected model (AR(1)) where a predicted value of $y$ highly depends on the true value of the (chronologically) previous datapoint.
-
-To demonstrate further that the model appears to be too confident, we plot the same data (only some age groups, the rest were omitted for brevity) using "ppc_intervals" function (see below).
-
-```{r}
-plot_ppc_intervals(fit_hierarchical, full_grouped_data)
-```
-
-Finally, in order to demonstrate further how correct (or incorrect) the model is, the error scatter plot is plotted below demonstrating average errors (of y_rep when compared to the actual data) for each datapoint in each age group.
-
-```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-```
-
-We can see that for most of the datapoinst, the average error is below 150. Moreover, approximately the same number of data points have negative error as the number of datapoints that have positive average error. It also can be noted that there is moer variation in values of average error for datapoints whose true value is above 1000 with extreme cases being -350 and just under 500.
-
-*From everything discussed above in the section, we can conclude that* the model is quite poor in terms of how it fits the data. From the simple visualizaions shown above, we can assume that some of the reasons for this are:
-
-1. Uncertainty intervals are not wide enough
-2. The fact that data depends mainly on the previous observation only (because of AR(1)), since data changes quite a bit on some occasions for the year $y$ compared to the year $y-1$.
-
-### Prior sensitivity analysis
-
-In this section we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
-
-First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline. (the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
-
-```{r}
-fit_hierarchical_wide_prior = fit_hierarchical_model(
-  mu_group_alpha_prior_sd = 100000,
-  mu_group_beta_prior_sd = 25,
-  tau_alpha_prior_sd = 10000,
-  tau_beta_prior_sd = 25
-) # wider prior
-print(fit_hierarchical_wide_prior)
-```
-
-Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
-
-```{r}
-print_fit_diagnostic(fit_hierarchical_wide_prior, tree_depth = 15)
-```
-
-No iterations saturated the maximum tree depth of 15 and there were only 5 divergences out of 21000, which is good enough for us to proceed with the model.
-
-```{r}
-loo_hierarchical_wide_prior <- get_loo_diagnostics(fit_hierarchical_wide_prior)
-print(loo_hierarchical_wide_prior)
-plot(loo_hierarchical_wide_prior)
-```
-
-PSIS-LOO analysis looks similar to the baseline case, where $\hat k$ values for some datapoinst exceeded 0.7. Also estimated ELPD_LOO value is very close to the baseline one.
-
-```{r}
-plot_ppc_ribbons(fit_hierarchical_wide_prior, full_grouped_data)
-```
-
-```{r}
-plot_ppc_intervals(fit_hierarchical_wide_prior, full_grouped_data)
-```
-
-Both ribbons and intervals visualizations look very similar to the baseline case.
-(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
-
-```{r}
-exact_elpd_hierarchical_wide_prior <- get_lfo_cv_results_hierarchical(
-  mu_group_alpha_prior_sd = 100000,
-  mu_group_beta_prior_sd = 25,
-  tau_alpha_prior_sd = 10000,
-  tau_beta_prior_sd = 25
-)
-rbind_print(
-  "LFO" = exact_elpd_hierarchical_wide_prior
-)
-```
-
-ELPD_LFO value is almost exaclty the same as in out baseline case (which was -581.87). So we can conclude that *there is almost no or very little difference between the models in terms of their predictive performance.*
-
-
-*Now let's try a stronger more narrow prior*
-
-(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
-
-```{r}
-fit_hierarchical_narrow_prior = fit_hierarchical_model(
-  mu_group_alpha_prior_sd = 2000,
-  mu_group_beta_prior_sd = 0.5,
-  tau_alpha_prior_sd = 10,
-  tau_beta_prior_sd = 0.1
-)
-print(fit_hierarchical_narrow_prior)
-```
-
-Again, we can see that ESS and $\hat R$ values are good. With smallest ESS still exceeding 3000.
-
-```{r}
-print_fit_diagnostic(fit_hierarchical_narrow_prior, tree_depth = 15)
-```
-
-No tree depth saturations and 0 divergences, which is even better compared to the previous cases where we did have a negligible number of divergences.
-
-```{r}
-loo_hierarchical_narrow_prior <- get_loo_diagnostics(fit_hierarchical_narrow_prior)
-print(loo_hierarchical_narrow_prior)
-plot(loo_hierarchical_narrow_prior)
-```
-
-PSIS-LOO results look similar to the previous cases, with estimates for ELPD value just slightly worse in the case of the narrow prior.
-
-```{r}
-plot_ppc_ribbons(fit_hierarchical_narrow_prior, full_grouped_data)
-```
-
-```{r}
-plot_ppc_intervals(fit_hierarchical_narrow_prior, full_grouped_data)
-```
-
-Similarly to the case of the wider prior, no noticable difference can be observed from the plots above compared to the other priors.
-
-```{r}
-exact_elpd_hierarchical_narrow_prior <- get_lfo_cv_results_hierarchical(
-  mu_group_alpha_prior_sd = 2000,
-  mu_group_beta_prior_sd = 0.5,
-  tau_alpha_prior_sd = 10,
-  tau_beta_prior_sd = 0.1
-)
-rbind_print(
-  "LFO" = exact_elpd_hierarchical_narrow_prior
-)
-```
-
-ELPD value calculated based on LFO analysis is very close to the other 2 reported before.
-
-The scatter plot below depicts average errors for different datapoints. X axis represents y - y_rep value, while Y axix represents a true value of the datapoint (hence y).
-
-```{r}
-y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
-y_rep_wide_prior <- as.matrix(fit_hierarchical_wide_prior, pars = "y_rep")
-y_rep_narrow_prior <- as.matrix(fit_hierarchical_narrow_prior, pars = "y_rep")
-plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
-plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
-
-plot(plot_wide_prior)
-plot(plot_baseline)
-plot(plot_narrow_prior)
-```
-
-Thus, based on the plots above and comparing ELDP values obtained using LFO-CV for each of the 3 different priors we can conclude that the model is not very sensitive to a reasonable changes in it's prior and is therefore can be considered as relatively robust and highly dependent on data.
-
-## Model 2
-
-This is the separate AR(1) model. In this model, we assume that there is no co-dependence between the age groups. As was explained previously (see Model 1 section), Poisson distribution was chosen since it is a common choice when modelling the number of events that occured over a period of time. Normal distribution was chosen for priors since we couldn't find any strong reason to use any other distribution (at least as the starting point) i.e. as the default choice. Below are some of the equations describing the separate model.
-
-$$
-y_{i, n} \sim poisson(\alpha_i + \beta_b \space y_{i, n-1})
-$$
-
-Below are the priors
-
-$$
-\alpha_i \sim Normal(0, sigma_{\alpha})
-$$
-
-$$
-\beta_i \sim Normal(0, sigma_{\beta})
-$$
-
-
-```{stan, output.var="stan_model_ar_separate"}
-data {
-  int<lower=0> N;
-  int<lower=0> K; // number of groups
-  int<lower=1,upper=K> x[N]; // group indicator
-  int<lower=0> y[N];
-  int<lower=0> y0[K];
-  real<lower=0> alpha_prior_sd;
-  real<lower=0> beta_prior_sd;
-  int<lower=0, upper=1> use_lfo_cv;
-}
-parameters {
-  real alpha[K];
-  real<lower=0> beta[K];
-}
-transformed parameters {
-  // whenever we do LFO-CV, we need to have data about T years, but we only fit T - 1
-  // due ti this, if LFO-CV is done, we're only fitting N - K datapoints
-  // (i.e. we're holding out the chronologically last datapoint for each of the groups)
-  real<lower=0> mu[use_lfo_cv ? (N - K) : N];
-  
-  for (n in 1:K) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y0[n];
-  }
-  
-  for (n in K+1:(use_lfo_cv ? (N - K) : N)) {
-    mu[n] = alpha[x[n]] + beta[x[n]] * y[n-K];
-  }
-}
-model {
-  for (n in 1:K) {
-    alpha[n] ~ normal(0, alpha_prior_sd); // prior
-    beta[n] ~ normal(0, beta_prior_sd);  // prior
-  }
-  
-  for (n in 1:(use_lfo_cv ? (N - K) : N)) {
-     y[n] ~ poisson(mu[n]);
-  }
-}
-generated quantities {
-  vector[N] log_lik;
-  real<lower=0> mu_pred[use_lfo_cv ? K : 0];
-  vector[use_lfo_cv ? 0 : N] y_rep;
-  
-  if (use_lfo_cv) {
-    for (n in 1:K) {
-      mu_pred[n] = alpha[n] + beta[n] * y[(N - (1 * K)) - K + n];
-    }
-    
-    for (i in 1:(N - (1 * K))) {
-      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
-    }
-    
-    for (i in 1:K) {
-      log_lik[(N - (1 * K)) + i] = poisson_lpmf(y[(N - (1 * K)) + i] | mu_pred[i]);
-    }
-  } else {
-    for (i in 1:N) {
-      y_rep[i] = poisson_rng(mu[i]);
-      log_lik[i] = poisson_lpmf(y[i] | mu[i]);
-    }
-  }
-}
-```
-
-
-### Prior predictive checking
-
-Similar to the previous model we first conduct prior predictive checking to come up with a sensible prior. The similar assumption as in Model 1 are used here to select our prior. Based on these, we decided to proceed with the first one because while being sufficiently wide, the data generated with it seemed sensible to us.
-
-```{r}
-check_prior_separate(
-  full_grouped_data,
-  alpha_prior_mean = 0,
-  alpha_prior_sd = 10000,
-  beta_prior_mean = 0,
-  beta_prior_sd = 2
-)
-```
-
-### Model diagnostics
-
-Fitting the model with the prior chosen above i.e.
-
-
-$$
-\alpha_i \sim Normal(0, 10000)
-$$
-
-$$
-\beta_i \sim Normal(0, 2)
-$$
-
-*To see how the Stan model is run, refer to the implementation of the function executed in the chunk below*
-
-```{r}
-fit_separate = fit_separate_model(
-  alpha_prior_sd = 10000,
-  beta_prior_sd = 2
-)
-print(fit_separate)
-```
-
-#### ESS and R hat diagnostics
-
-All of the $\hat R$ values look good and ESS values are all well above 10000, which is more than enough given that we only have 7 chains (7 * 10 = 70).
-
-(For more discussion, see Model 1 section).
-
-#### HMC -specific convergence diagnostics
-
-```{r}
-print_fit_diagnostic(fit_separate, tree_depth = 10)
-```
-
-HMC -specific convergence diagnostics looks good too.
-
-(For more discussion, see Model 1 section).
-
-#### PSIS-LOO and LFO
-
-```{r}
-loo_separate <- get_loo_diagnostics(fit_separate)
-print(loo_separate)
-plot(loo_separate)
-```
-
-The results of PSIS-LOO look very similar to those of model 1. In particular, the estimated ELPD value is equal to -509 which is very close to the value obtained for the hierarchical model (which was -509.7). Besides, similarly to the case of model 1, $\hat k$ values for some of the data points exceed the threshold of 0.7. For this reason, and because LOO-CV uses information of "future" datapoints, which is not appropriate in our case, we're doing complete leave-future-out cross validation using the dataset and the separate model.
-
-
-Below are the results of leave-one-future-out cross validation.
-
-```{r}
-exact_elpd_separate <- get_lfo_cv_results_separate(
-  alpha_prior_sd = 10000,
-  beta_prior_sd = 2
-)
-rbind_print(
-  "LFO" = exact_elpd_separate
-)
-```
-
-The results are close to that of the first model but comperatively worse.  In particular, the ELPD value is at -592.5 as opposed to -582 (for the case of the 2nd model).
-
-### Graphical posterior predictive checking
-
-Below are the plots of the true data plotted against 21000 draws from the posterior of the model. The draws from the posterior are summarised using "ribbons" and "intervals" plots.
-
-```{r}
-plot_ppc_ribbons(fit_separate, full_grouped_data)
-```
-
-```{r}
-plot_ppc_intervals(fit_separate, full_grouped_data)
-```
-
-The plots look very similar to those of the first model. Again, it can be seen that the model does not match the data in many cases, the interval is too narrow and in many cases the model is visibly a slightly modified lagged-by-1 version of the true data set. This again can be partly explained by constraints of AR(1), see " Graphical posterior predictive checking" subsection for model 1 for more discussion.
-
-```{r}
-y_rep <- as.matrix(fit_separate, pars = "y_rep")
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-```
-
-The error scatter plot looks similar to that of the first model. The discussion and observations of model 1 apply to this case as well.
-
-### Prior sensitivity analysis
-
-In this section, once again, we try a couple of different priors and compare the results obtained to the ones demonstrated in the previous section.
-
-First, let's try another sensible but wider prior, while keeping results of the previous fit as our baseline.
-
-(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
-
-```{r}
-fit_separate_wide_prior = fit_separate_model(
-  alpha_prior_sd = 10000,
-  beta_prior_sd = 25
-)
-print(fit_separate_wide_prior)
-```
-
-ESS and $\hat R$ both look good
-
-```{r}
-print_fit_diagnostic(fit_separate_wide_prior, tree_depth = 10)
-```
-
-No tree depth saturations and only 2 divergences per 21000 iterations.
-
-```{r}
-loo_separate_wide_prior <- get_loo_diagnostics(fit_separate_wide_prior)
-print(loo_separate_wide_prior)
-plot(loo_separate_wide_prior)
-```
-
-PSIS-LOO -based ELPD estimation is almost the same as in the baseline case.
-
-
-```{r}
-plot_ppc_ribbons(fit_separate_wide_prior, full_grouped_data)
-```
-
-Graphically, no noticable differences can be observed from the posterior compared to the baseline case.
-
-```{r}
-exact_elpd_separate_wide_prior <- get_lfo_cv_results_separate(
-  alpha_prior_sd = 10000,
-  beta_prior_sd = 25
-)
-rbind_print(
-  "LFO" = exact_elpd_separate_wide_prior
-)
-```
-
-Leave-one-future-out CV -based elpD value just slightly better than in the baseline case; -590 compared to -592.5.
-
-
-Now let's try a stronger more narrow prior
-
-(the priors have the same distributions as in the baseline case but different values, for the values, see the code chunk below)
-
-```{r}
-fit_separate_narrow_prior = fit_separate_model(
-  alpha_prior_sd = 2000,
-  beta_prior_sd = 0.5
-)
-print(fit_separate_narrow_prior)
-```
-
-Similarly ESS and $\hat R$ are very good.
-
-```{r}
-print_fit_diagnostic(fit_separate_narrow_prior, tree_depth = 10)
-```
-
-Again, no max. tree depth saturation and only 7 divergences (which is 0.03% of all 21000 iterations). Thus, we can conclude that HMC -specifics convergence diagnostics looks good too.
-
-```{r}
-loo_separate_narrow_prior <- get_loo_diagnostics(fit_separate_narrow_prior)
-print(loo_separate_narrow_prior)
-plot(loo_separate_narrow_prior)
-```
-
-Same results as with the previously tried priors.
-
-```{r}
-exact_elpd_separate_narrow_prior <- get_lfo_cv_results_separate(
-  alpha_prior_sd = 2000,
-  beta_prior_sd = 0.5
-)
-rbind_print(
-  "LFO" = exact_elpd_separate_narrow_prior
-)
-```
-
-Rather surprisingly, the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously. (the calculations are based on LFO-CV)
-
-
-Finally, error scatter plots are shown below next to each other for better comparison.
-```{r}
-y_rep <- as.matrix(fit_separate, pars = "y_rep")
-y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
-y_rep_narrow_prior <- as.matrix(fit_separate_narrow_prior, pars = "y_rep")
-plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
-plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
-plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
-
-plot(plot_wide_prior)
-plot(plot_baseline)
-plot(plot_narrow_prior)
-```
-
-It can be seen, that the error pattern is almost exactly the same for all the priors with no or almost no noticable difference.
-
-We thus can conclude that the choice of sensible prior does not significantly affect the posterior, although it does have some effect since we saw slight improvement in ELPD when a stronger prior was tried.
-
-## Model comparison
-
-Here is a visual comparison for hierarchical and separate model respectively.
-The plots are the error scatter plots that were already demonstrated, explained and discussed in the previous sections.
-
-```{r}
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
-```
-
-As can be seen from the plots above and comparison table below, the difference between the 2 models is rather small one. Although, the hierarchical model had slightly better values for ELPD, we were able to obtain very close values with the separate model by using a slightly stringler prior.
-
-```{r}
-comparison_results = matrix(
-  c(
-    loo_hierarchical$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_hierarchical, # LFO-based elpd
-    loo_hierarchical_wide_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_hierarchical_wide_prior, # LFO-based elpd
-    loo_hierarchical_narrow_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_hierarchical_narrow_prior, # LFO-based elpd
-    loo_separate$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_separate, # LFO-based elpd
-    loo_separate_wide_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_separate_wide_prior, # LFO-based elpds
-    loo_separate_narrow_prior$estimates[1:2], # PSIS-LOO -based elpd and p_eff values
-    exact_elpd_separate_narrow_prior # LFO-based elpd
-  ),
-  ncol = 6,
-  dimnames = list(
-    c("elpd_loo", "p_loo", "elpd_lfo"),
-    c("hierarchical",
-      "hier. (wide prior)",
-      "hier. (narrow prior)",
-      "sep.",
-      "sep. (wide prior)",
-      "sep. (narrow prior)")
-  )
-)
-```
-
-```{r echo = FALSE, results = 'asis'}
-library(knitr)
-kable(comparison_results, digits = 1)
-```
-
-Thus, using all the information obtained during the analysis reported in this notebook, we can conclude autoregressive model of 1st order is not a good fit for the data at hand. Graphical posterior predictive checking demonstrated poor fit of both models to the data. For more discussion on the identified problems and potential future improvements, see the next section.
-
-Moreover, we observed little difference between separate and hierarchical model even though the initial choice of priors could lead us to believe that the hierarchical model performed slightly better (this can be once again observed from the table shown above). 
-
-# Problems encountered and potential improvements
-
-This section discusses some of the identified problems and proposes some of the improvements that could serve as the next steps in analysing the dataset at hand.
-
-1. The confidence interval seems to be too narrow. This seems to be primarily caused by inability to specify thinkness of the tails in Poisson distribution that was used in both models. One idea for future improvements would be then to try a negative binomial distribution instead. Negative binomial distribution is similar to Poisson but can have much thinker tails if appropriate parameters are used (see https://en.wikipedia.org/wiki/Negative_binomial_distribution). Another idea is to use truncated normal distribution (see https://en.wikipedia.org/wiki/Truncated_normal_distribution), by having its lower bound equal to 0.
-
-2. As noted previously, it can be seen from the graphical posterior predictive checking that the model looks similar to the original data but lagged by one year. This can be a consequence of the fact that we were using AR(1) model. As one idea for potential improvement, autoregressive models with higher orders e.g. 2, 3 or 4 could be tried. In addition, other common time-series models such as Moving Average MA or Autoregressive Moving Average ARMA could be tried.
-
-3. Perhaps, one issue was that the factor based on which separation into groups has been done (age of the victim) is a poor choice. Perhaps, some other factor should be chosen as a basis for grouping the data. On the other hand, pooled model, where all the data is analyzed together could be a better option as well.
-
-4. Another problem was the fact that we only had 10 years of history data available. Perhaps, if we could get access to earlier history data, fitting a time-series model would be easier (for a variaty of reasons). One thing that more history data would make easier is using AR, MA or ARMA models with greater order e.g. AR(5), MA(4), etc. 
-
-5. The nature of the data itself as well as the way it is collected can also often be an issue. In this case, the numbers represent the amount of reported domestic violence cases. Such data can be highly volatile due to e.g. the fact that more or less people happen to report in a certain year. Perhaps, if estimates of actual violence cases would be used, fitting a model would be easier.
-
-6. Another problem envountered was that conductig LFO-CV was way too slow. One option for improvement would be to use an approximation for it that was demonstrated in http://mc-stan.org/loo/articles/loo2-lfo.html.
-
-# Conclusion
-
-In the report, we tried to fit 2 different autoregressive models to the data at hand and analysed the results. The data (the number of domestic violence cases reported from 2009 to 2018) was partitioned into 11 groups by the age of the victim. After conducting a thorough analysis of the models, we came to a conclusion that both models fit the data quite poorly. Besides, according to the results obtained, there was little difference in predictive performance between the hierarchical and separate models. Thus, none of the models can be reliably used for predicting the number of reported cases in the future. Several specific issues encountered were documented and some of the idea about future improvements proposed in the previous section.
-
-
