@@ -742,7 +742,7 @@ $$
 tau_{\beta} \sim Cauchy(0, 2)
 $$
 
-**To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the appendix section)**
+**To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the Appendix section)**
 
 ```{r}
 fit_hierarchical <- fit_hierarchical_model(
@@ -971,7 +971,10 @@ rbind_print(
 
 ELPD value calculated based on LFO analysis is very close to the other 2 reported before.
 
-The scatter plot below depicts average errors for different datapoints. X axis represents y - y_rep value, while Y axix represents a true value of the datapoint (hence y).
+
+The scatter plot below depicts average errors for different datapoints. X axis represents y - y_rep value, while Y axix represents a true value of the datapoint (hence y). The error scatter plots for fits with each of the priors are shown below next to each other for better comparison.
+
+**The order of the plots is as follows (left to right, top to bottom): Wide priors, Baseline, Narrow priors**
 
 ```{r}
 y_rep <- as.matrix(fit_hierarchical, pars = "y_rep")
@@ -981,9 +984,7 @@ plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
 plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
 
-plot(plot_wide_prior, main = "Wide prior")
-plot(plot_baseline, main = "Baseline")
-plot(plot_narrow_prior, main = "Narrow prior")
+grid.arrange(grobs = list(plot_wide_prior, plot_baseline, plot_narrow_prior), ncol = 2)
 ```
 
 Thus, based on the plots above and comparing ELDP values obtained using LFO-CV for each of the 3 different priors we can conclude that the model is not very sensitive to a reasonable changes in it's prior and is therefore can be considered as relatively robust and highly dependent on data.
@@ -1262,7 +1263,7 @@ rbind_print(
 Rather surprisingly, the ELPD result is better for the separate model when a stricter prior is used. Although the differrence is not significant, the last model has the same ELPD value as the hierarchical models presented previously. (the calculations are based on LFO-CV)
 
 
-Finally, error scatter plots are shown below next to each other for better comparison.
+Finally, error scatter plots for fits with each of the priors are shown below next to each other for better comparison. **The order of the plots is as follows (left to right, top to bottom): Wide priors, Baseline, Narrow priors**
 ```{r}
 y_rep <- as.matrix(fit_separate, pars = "y_rep")
 y_rep_wide_prior <- as.matrix(fit_separate_wide_prior, pars = "y_rep")
@@ -1271,9 +1272,7 @@ plot_baseline = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep)
 plot_wide_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_wide_prior)
 plot_narrow_prior = ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), y_rep_narrow_prior)
 
-plot(plot_wide_prior, main = "Wide prior")
-plot(plot_baseline, main = "Baseline")
-plot(plot_narrow_prior, main = "Narrow prior")
+grid.arrange(grobs = list(plot_wide_prior, plot_baseline, plot_narrow_prior), ncol = 2)
 ```
 
 It can be seen, that the error pattern is almost exactly the same for all the priors with no or almost no noticable difference.
@@ -1286,8 +1285,14 @@ We thus can conclude that the choice of sensible prior does not significantly af
 The plots are the error scatter plots that were already demonstrated, explained and discussed in the previous sections.
 
 ```{r}
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_hierarchical, pars = "y_rep"))
-ppc_error_scatter_avg(c(full_grouped_data[, (2:10)]), as.matrix(fit_separate, pars = "y_rep"))
+plot1 <- ppc_error_scatter_avg(
+  c(full_grouped_data[, (2:10)]),
+  as.matrix(fit_hierarchical,pars = "y_rep"))
+plot2 <- ppc_error_scatter_avg(
+  c(full_grouped_data[, (2:10)]),
+  as.matrix(fit_separate, pars = "y_rep"))
+
+grid.arrange(grobs = list(plot1, plot2), ncol = 2)
 ```
 
 As can be seen from the plots above and comparison table below, the difference between the 2 models is rather small one. Although, the hierarchical model had slightly better values for ELPD, we were able to obtain very close values with the separate model by using a slightly stringler prior.
