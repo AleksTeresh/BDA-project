@@ -742,7 +742,7 @@ $$
 tau_{\beta} \sim Cauchy(0, 2)
 $$
 
-**To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the Appendix section)**
+**To see how the Stan model is run, refer to the implementation of the function `fit_hierarchical_model` (which can be found in the Appendix section)**
 
 ```{r}
 fit_hierarchical <- fit_hierarchical_model(
@@ -1101,7 +1101,7 @@ $$
 \beta_i \sim Normal(0, 2)
 $$
 
-**To see how the Stan model is run, refer to the implementation of the function executed in the chunk below (which can be found in the appendix section)**
+**To see how the Stan model is run, refer to the implementation of the function `fit_separate_model` (which can be found in the Appendix section)**
 
 ```{r}
 fit_separate = fit_separate_model(
