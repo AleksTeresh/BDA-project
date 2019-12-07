@@ -1,0 +1,8 @@
+name: "BDA project"
+navbar:
+  title: "BDA project"
+  left:
+  - text: "Project report"
+    href: index.html
+output:
+  html_document:
